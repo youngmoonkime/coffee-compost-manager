@@ -2,9 +2,9 @@ import type { Batch, CompostSettings, MeasurementLog } from '../types';
 
 export const DEFAULT_SETTINGS: CompostSettings = {
   targetMoistureThreshold: 45,
-  targetTempDiffThreshold: 10,
   highMoistureThreshold: 65,
   highTempThreshold: 65,
+  coreProbeDepthCm: 15,
 };
 
 /**

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { Batch, MeasurementLog, CompostSettings, ActiveTab, VerdictInfo, GoogleSheetsConfig } from '../types';
 import { DEFAULT_BATCHES, DEFAULT_MEASUREMENTS, DEFAULT_SETTINGS } from '../constants/defaultData';
 import { getStorageItem, setStorageItem } from '../utils/storage';
@@ -8,6 +8,9 @@ import {
   sendBatchEventToGoogleSheets,
   syncAllDataToGoogleSheets,
   deleteMeasurementFromGoogleSheets,
+  loadFromGoogleSheets,
+  deleteBatchFromGoogleSheets,
+  clearAllFromGoogleSheets,
   REQUIRED_SCRIPT_VERSION,
 } from '../services/googleSheetsService';
 import type { SyncResult } from '../services/googleSheetsService';
@@ -39,6 +42,13 @@ function normalizeBatches(rawBatches: Batch[], rawMeasurements: MeasurementLog[]
       return { ...b, completedDate: lastMeasuredDate.get(b.id) || b.startDate };
     })
     .sort((a, b) => b.startDate.localeCompare(a.startDate));
+}
+
+export interface SaveMeasurementResult {
+  saved: boolean;
+  /** 시트 반영 결과 — 'skipped' 는 연동을 안 했거나 자동 전송이 꺼진 경우 */
+  sheet: 'synced' | 'failed' | 'unverified' | 'skipped';
+  message?: string;
 }
 
 export interface CompleteBatchResult {
@@ -76,19 +86,27 @@ interface CompostContextValue {
   setActiveTab: (tab: ActiveTab) => void;
   addNewBatch: (batch: { code: string; ranchName: string; initialWeightKg: number; notes?: string }) => void;
   addMeasurementLog: (
-    input: { coreTemp: number; ambientTemp: number; moisture: number; ambientHum: number; notes?: string },
-    onSyncSuccess?: () => void
-  ) => Promise<void>;
+    input: { coreTemp: number; ambientTemp: number; moisture: number; ambientHum: number; notes?: string }
+  ) => Promise<SaveMeasurementResult>;
+  /** 구글 시트(백엔드)에서 배치·계측 기록을 다시 읽어온다 */
+  reloadFromSheet: () => Promise<SyncResult>;
+  /** 시트에서 불러오는 중인지 */
+  isLoadingFromSheet: boolean;
+  /** 시트를 원본으로 쓰는 상태인지 (웹 앱 URL이 등록돼 있음) */
+  isSheetBackend: boolean;
   updateSettings: (newSettings: Partial<CompostSettings>) => void;
   updateGoogleConfig: (newConfig: Partial<GoogleSheetsConfig>) => void;
   syncLogToGoogleSheets: (log: MeasurementLog) => Promise<SyncResult>;
   syncAllToGoogleSheets: () => Promise<SyncResult & { count: number }>;
   completeBatch: (batchId: string) => CompleteBatchResult;
-  deleteMeasurementLog: (logId: string) => void;
+  /** 계측 기록 삭제 — 시트에서도 제거 */
+  deleteMeasurementLog: (logId: string) => Promise<SyncResult>;
+  /** 배치 삭제 — 계측 기록까지 함께, 시트에서도 제거 */
+  deleteBatch: (batchId: string) => Promise<SyncResult>;
   /** 커피박 수거량(kg) 수정 — 시트의 배치 관리현황에도 수정 이력이 남는다 */
   updateBatchWeight: (batchId: string, weightKg: number) => WeightUpdateResult;
-  /** 배치·계측 기록을 모두 비운다 (구글 시트 설정과 판정 임계값은 유지) */
-  resetBatchData: () => void;
+  /** 배치·계측 기록을 모두 비운다. 시트에서도 비운다 (연동 설정·임계값은 유지) */
+  resetBatchData: () => Promise<SyncResult>;
 }
 
 const CompostContext = createContext<CompostContextValue | null>(null);
@@ -125,6 +143,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [activeTab, setActiveTab] = useState<ActiveTab>('monitoring');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState<boolean>(false);
+  const [isLoadingFromSheet, setIsLoadingFromSheet] = useState<boolean>(false);
 
   // localStorage 동기화
   useEffect(() => {
@@ -175,12 +194,14 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   /** 완료된 배치는 읽기 전용 — 새 계측을 기록할 수 없다 */
   const isActiveBatchCompleted = activeBatch?.status === 'completed';
 
+  /** 구글 시트를 원본으로 쓰는 상태 */
+  const isSheetBackend = Boolean(googleConfig.sheetWebhookUrl);
+
   // 현재 실시간 판정 결과
   const currentVerdict = useMemo(() => {
     const core = latestLog?.coreTemp ?? 38.0;
-    const ambient = latestLog?.ambientTemp ?? 24.0;
     const moist = latestLog?.moisture ?? 49.0;
-    return evaluateFermentation(core, ambient, moist, settings);
+    return evaluateFermentation(core, moist, settings);
   }, [latestLog, settings]);
 
   /**
@@ -210,6 +231,57 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const isScriptOutdated =
     googleConfig.scriptVersion !== undefined && googleConfig.scriptVersion < REQUIRED_SCRIPT_VERSION;
 
+  /**
+   * 구글 시트를 원본으로 삼아 배치·계측 기록을 통째로 갈아끼운다.
+   * localStorage 는 오프라인 캐시 역할만 한다 — 시트를 읽을 수 있으면 시트가 이긴다.
+   */
+  const reloadFromSheet = useCallback(async (): Promise<SyncResult> => {
+    if (!googleConfig.sheetWebhookUrl) {
+      return { success: false, verified: true, message: '구글 웹 앱 URL이 설정되지 않았습니다.' };
+    }
+
+    setIsLoadingFromSheet(true);
+    try {
+      const result = await loadFromGoogleSheets(
+        googleConfig.sheetWebhookUrl,
+        (core, moist) => evaluateFermentation(core, moist, settings).type
+      );
+
+      if (result.success && result.snapshot) {
+        const { batches: sheetBatches, measurements: sheetMeasurements } = result.snapshot;
+        setMeasurements(sheetMeasurements);
+        setBatches(normalizeBatches(sheetBatches, sheetMeasurements));
+        // 시트 기준으로 갈아끼웠으니 활성 배치도 다시 고른다
+        setActiveBatchId(prev => {
+          if (prev && sheetBatches.some(b => b.id === prev)) return prev;
+          const fermenting = sheetBatches.find(b => b.status === 'fermenting');
+          return fermenting?.id || sheetBatches[0]?.id || '';
+        });
+      }
+
+      if (result.scriptVersion) {
+        setGoogleConfig(prev => ({ ...prev, scriptVersion: result.scriptVersion }));
+      }
+
+      return result;
+    } finally {
+      setIsLoadingFromSheet(false);
+    }
+  }, [googleConfig.sheetWebhookUrl, settings]);
+
+  /**
+   * 앱을 열면 시트에서 자동으로 불러온다.
+   * URL 이 바뀌었을 때도 다시 읽는다. 실패하면 캐시된 로컬 데이터를 그대로 쓴다.
+   */
+  const hydratedUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    const url = googleConfig.sheetWebhookUrl;
+    if (!url || hydratedUrlRef.current === url) return;
+
+    hydratedUrlRef.current = url;
+    reloadFromSheet().catch(() => {});
+  }, [googleConfig.sheetWebhookUrl, reloadFromSheet]);
+
   // 구글 시트 동기화 단일 실행 함수
   const syncLogToGoogleSheets = useCallback(async (log: MeasurementLog): Promise<SyncResult> => {
     if (!googleConfig.sheetWebhookUrl) {
@@ -220,7 +292,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     setIsSyncing(true);
-    const verdictInfo = evaluateFermentation(log.coreTemp, log.ambientTemp, log.moisture, settings);
+    const verdictInfo = evaluateFermentation(log.coreTemp, log.moisture, settings);
     const result = await sendMeasurementToGoogleSheets(
       googleConfig.sheetWebhookUrl,
       log,
@@ -254,27 +326,17 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setBatches(prev => [newBatch, ...prev]);
     setActiveBatchId(newId);
 
-    // 초기 측정값 자동 등록 (DAY 1)
-    const initialLog: MeasurementLog = {
-      id: `log-${Date.now()}`,
-      batchId: newId,
-      dayNumber: 1,
-      date: getCurrentDateString(),
-      time: getCurrentTimeString(),
-      coreTemp: 35.0,
-      moisture: 65.0,
-      ambientTemp: 22.0,
-      ambientHum: 60.0,
-      tempDiff: 13.0,
-      verdict: 'ongoing',
-    };
-    setMeasurements(prev => [...prev, initialLog]);
+    // 계측 기록은 실제로 측정했을 때만 생긴다.
+    // 예전에는 하역 등록 시 35℃/65% 같은 임의값으로 DAY 1 기록을 자동 생성해서,
+    // 재본 적 없는 값이 이력과 구글 시트에 남았다.
 
     // 구글 시트에 배치 생성 이벤트 실시간 전송
-    if (googleConfig.sheetWebhookUrl && googleConfig.autoSync) {
-      sendBatchEventToGoogleSheets(googleConfig.sheetWebhookUrl, newBatch, 'batch_created').catch(() => {});
+    if (googleConfig.sheetWebhookUrl) {
+      sendBatchEventToGoogleSheets(googleConfig.sheetWebhookUrl, newBatch, 'batch_created')
+        .then(res => applySyncResult(res, 0))
+        .catch(() => {});
     }
-  }, [googleConfig.sheetWebhookUrl, googleConfig.autoSync]);
+  }, [googleConfig.sheetWebhookUrl, applySyncResult]);
 
   // 측정 로그 추가 (구글 시트 실시간 자동 동기화 지원)
   const addMeasurementLog = useCallback(async (
@@ -284,15 +346,22 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       moisture: number;
       ambientHum: number;
       notes?: string;
-    },
-    onSyncSuccess?: () => void
-  ) => {
-    if (!activeBatch) return;
+    }
+  ): Promise<SaveMeasurementResult> => {
+    if (!activeBatch) return { saved: false, sheet: 'skipped', message: '활성 배치가 없습니다.' };
     // 완료된 배치에 새 계측을 붙이면 '완숙 완료 이후의 계측'이라는 모순이 생긴다.
-    if (activeBatch.status === 'completed') return;
+    if (activeBatch.status === 'completed') {
+      return { saved: false, sheet: 'skipped', message: '완숙 완료된 배치입니다.' };
+    }
 
-    const diff = Math.max(0, input.coreTemp - input.ambientTemp);
-    const verdictInfo = evaluateFermentation(input.coreTemp, input.ambientTemp, input.moisture, settings);
+    const verdictInfo = evaluateFermentation(input.coreTemp, input.moisture, settings);
+
+    // 심부온도는 외기와 비교하는 값이 아니라, 같은 더미를 기간을 두고 다시 재서
+    // 추이를 보는 값이다. 직전 계측(이번 일차를 덮어쓰는 경우는 제외) 대비 변화를 남긴다.
+    const previous = measurements
+      .filter(m => m.batchId === activeBatch.id && m.dayNumber < daysElapsed)
+      .sort((a, b) => a.dayNumber - b.dayNumber)
+      .pop();
 
     const newLog: MeasurementLog = {
       id: `log-${Date.now()}`,
@@ -304,7 +373,9 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       moisture: input.moisture,
       ambientTemp: input.ambientTemp,
       ambientHum: input.ambientHum,
-      tempDiff: parseFloat(diff.toFixed(1)),
+      coreTempDelta: previous
+        ? parseFloat((input.coreTemp - previous.coreTemp).toFixed(1))
+        : undefined,
       verdict: verdictInfo.type,
       notes: input.notes?.trim() || undefined,
     };
@@ -316,27 +387,36 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     // 구글 시트 자동 동기화 활성화 시 실시간 전송
-    if (googleConfig.autoSync && googleConfig.sheetWebhookUrl) {
-      setIsSyncing(true);
-      try {
-        const res = await sendMeasurementToGoogleSheets(
-          googleConfig.sheetWebhookUrl,
-          newLog,
-          activeBatch,
-          verdictInfo.title
-        );
-        applySyncResult(res);
-        // 응답을 확인한 진짜 성공일 때만 성공 콜백을 호출한다.
-        if (res.success && res.verified && onSyncSuccess) {
-          onSyncSuccess();
-        }
-      } catch (err) {
-        console.error('구글 시트 실시간 전송 오류:', err);
-      } finally {
-        setIsSyncing(false);
-      }
+    if (!googleConfig.sheetWebhookUrl) {
+      return { saved: true, sheet: 'skipped' };
     }
-  }, [activeBatch, daysElapsed, settings, googleConfig.autoSync, googleConfig.sheetWebhookUrl, applySyncResult]);
+
+    setIsSyncing(true);
+    try {
+      const res = await sendMeasurementToGoogleSheets(
+        googleConfig.sheetWebhookUrl,
+        newLog,
+        activeBatch,
+        verdictInfo.title
+      );
+      applySyncResult(res);
+
+      return {
+        saved: true,
+        sheet: !res.success ? 'failed' : res.verified ? 'synced' : 'unverified',
+        message: res.message,
+      };
+    } catch (err) {
+      console.error('구글 시트 실시간 전송 오류:', err);
+      return {
+        saved: true,
+        sheet: 'failed',
+        message: err instanceof Error ? err.message : '시트 전송 중 오류가 발생했습니다.',
+      };
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [activeBatch, daysElapsed, settings, measurements, googleConfig.sheetWebhookUrl, applySyncResult]);
 
   // 전체 데이터 구글 시트 일괄 동기화 (Bulk Sync)
   const syncAllToGoogleSheets = useCallback(async () => {
@@ -349,7 +429,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       googleConfig.sheetWebhookUrl,
       batches,
       measurements,
-      (c, a, m) => evaluateFermentation(c, a, m, settings).title
+      (c, m) => evaluateFermentation(c, m, settings).title
     );
     setIsSyncing(false);
 
@@ -400,16 +480,18 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setBatches(prev => prev.map(b => (b.id === batchId ? completed : b)));
 
-    if (googleConfig.sheetWebhookUrl && googleConfig.autoSync) {
+    if (googleConfig.sheetWebhookUrl) {
       sendBatchEventToGoogleSheets(
         googleConfig.sheetWebhookUrl,
         completed,
         'batch_completed'
-      ).catch(() => {});
+      )
+        .then(res => applySyncResult(res, 0))
+        .catch(() => {});
     }
 
     return { completed: true };
-  }, [batches, measurements, googleConfig.sheetWebhookUrl, googleConfig.autoSync]);
+  }, [batches, measurements, googleConfig.sheetWebhookUrl, applySyncResult]);
 
   // 커피박 수거량(kg) 수정
   const updateBatchWeight = useCallback((batchId: string, weightKg: number): WeightUpdateResult => {
@@ -422,7 +504,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const updated: Batch = { ...target, initialWeightKg: normalized };
     setBatches(prev => prev.map(b => (b.id === batchId ? updated : b)));
 
-    const linked = Boolean(googleConfig.sheetWebhookUrl && googleConfig.autoSync);
+    const linked = Boolean(googleConfig.sheetWebhookUrl);
 
     // 구버전 스크립트에 보내면 부숙일지에 쓰레기 행이 생기므로 전송하지 않는다.
     if (linked && isScriptOutdated) {
@@ -431,42 +513,81 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (linked) {
       sendBatchEventToGoogleSheets(googleConfig.sheetWebhookUrl, updated, 'batch_updated')
-        .then(applySyncResult)
+        .then(res => applySyncResult(res, 0))
         .catch(() => {});
     }
 
     return { changed: true, syncedToSheet: linked, needsScriptRedeploy: false };
-  }, [batches, googleConfig.sheetWebhookUrl, googleConfig.autoSync, isScriptOutdated, applySyncResult]);
+  }, [batches, googleConfig.sheetWebhookUrl, isScriptOutdated, applySyncResult]);
 
   /**
-   * 배치와 계측 기록을 모두 비운다.
-   * 구글 시트 연동 설정과 판정 임계값은 건드리지 않으며,
-   * 시트에 이미 기록된 행도 지우지 않는다.
+   * 배치와 계측 기록을 모두 비운다. 시트에서도 함께 비운다.
+   * 시트만 남겨두면 다음 접속 때 지운 데이터가 그대로 되살아난다.
+   * (연동 설정과 판정 임계값은 건드리지 않는다)
    */
-  const resetBatchData = useCallback(() => {
+  const resetBatchData = useCallback(async (): Promise<SyncResult> => {
     setBatches([]);
     setMeasurements([]);
     setActiveBatchId('');
-  }, []);
+
+    if (!googleConfig.sheetWebhookUrl) {
+      return { success: true, verified: true, message: '앱의 기록을 모두 삭제했습니다.' };
+    }
+
+    const result = await clearAllFromGoogleSheets(googleConfig.sheetWebhookUrl);
+    applySyncResult(result, 0);
+    return result;
+  }, [googleConfig.sheetWebhookUrl, applySyncResult]);
+
+  /** 배치 삭제 — 그 배치의 계측 기록까지 함께, 시트에서도 제거 */
+  const deleteBatch = useCallback(async (batchId: string): Promise<SyncResult> => {
+    const target = batches.find(b => b.id === batchId);
+    if (!target) {
+      return { success: false, verified: true, message: '삭제할 배치를 찾지 못했습니다.' };
+    }
+
+    setMeasurements(prev => prev.filter(m => m.batchId !== batchId));
+    setBatches(prev => {
+      const remaining = prev.filter(b => b.id !== batchId);
+      setActiveBatchId(current => {
+        if (current !== batchId) return current;
+        const fermenting = remaining.find(b => b.status === 'fermenting');
+        return fermenting?.id || remaining[0]?.id || '';
+      });
+      return remaining;
+    });
+
+    if (!googleConfig.sheetWebhookUrl) {
+      return { success: true, verified: true, message: `${target.code} 를 앱에서 삭제했습니다.` };
+    }
+
+    const result = await deleteBatchFromGoogleSheets(googleConfig.sheetWebhookUrl, target.code);
+    applySyncResult(result, 0);
+    return result;
+  }, [batches, googleConfig.sheetWebhookUrl, applySyncResult]);
 
   // 측정 로그 삭제 — 시트의 해당 행도 함께 제거해야 앱 목록과 시트가 어긋나지 않는다.
-  const deleteMeasurementLog = useCallback((logId: string) => {
+  const deleteMeasurementLog = useCallback(async (logId: string): Promise<SyncResult> => {
     const target = measurements.find(m => m.id === logId);
-    if (!target) return;
+    if (!target) {
+      return { success: false, verified: true, message: '삭제할 기록을 찾지 못했습니다.' };
+    }
 
     setMeasurements(prev => prev.filter(m => m.id !== logId));
 
-    if (googleConfig.sheetWebhookUrl && googleConfig.autoSync) {
-      const batch = batches.find(b => b.id === target.batchId);
-      if (batch) {
-        deleteMeasurementFromGoogleSheets(
-          googleConfig.sheetWebhookUrl,
-          batch.code,
-          target.dayNumber
-        ).catch(() => {});
-      }
+    const batch = batches.find(b => b.id === target.batchId);
+    if (!googleConfig.sheetWebhookUrl || !batch) {
+      return { success: true, verified: true, message: '앱에서 삭제했습니다.' };
     }
-  }, [measurements, batches, googleConfig.sheetWebhookUrl, googleConfig.autoSync]);
+
+    const result = await deleteMeasurementFromGoogleSheets(
+      googleConfig.sheetWebhookUrl,
+      batch.code,
+      target.dayNumber
+    );
+    applySyncResult(result, 0);
+    return result;
+  }, [measurements, batches, googleConfig.sheetWebhookUrl, applySyncResult]);
 
   // 컨텍스트 값을 메모이즈해야 Provider 리렌더마다 모든 소비자가 재렌더되는 것을 막을 수 있다.
   const value = useMemo<CompostContextValue>(
@@ -496,8 +617,12 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       syncAllToGoogleSheets,
       completeBatch,
       deleteMeasurementLog,
+      deleteBatch,
       updateBatchWeight,
       resetBatchData,
+      reloadFromSheet,
+      isLoadingFromSheet,
+      isSheetBackend,
     }),
     [
       batches,
@@ -522,8 +647,12 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       syncAllToGoogleSheets,
       completeBatch,
       deleteMeasurementLog,
+      deleteBatch,
       updateBatchWeight,
       resetBatchData,
+      reloadFromSheet,
+      isLoadingFromSheet,
+      isSheetBackend,
     ]
   );
 

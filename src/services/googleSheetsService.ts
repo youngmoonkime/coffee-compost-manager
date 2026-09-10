@@ -12,7 +12,8 @@ export interface GoogleSyncPayload {
   moisture: number;
   ambientTemp: number;
   ambientHum: number;
-  tempDiff: number;
+  /** 직전 계측 대비 심부온도 변화(℃). 첫 계측이면 빈 값 */
+  coreTempDelta: number | string;
   verdictTitle: string;
   notes?: string;
   isTest?: boolean;
@@ -23,7 +24,7 @@ export interface GoogleBulkSyncPayload {
   items: GoogleSyncPayload[];
 }
 
-export const REQUIRED_SCRIPT_VERSION = 2;
+export const REQUIRED_SCRIPT_VERSION = 5;
 
 export interface SyncResult {
   success: boolean;
@@ -120,7 +121,7 @@ function toPayload(log: MeasurementLog, batch: Batch, verdictTitle: string): Goo
     moisture: log.moisture,
     ambientTemp: log.ambientTemp,
     ambientHum: log.ambientHum,
-    tempDiff: log.tempDiff,
+    coreTempDelta: log.coreTempDelta ?? '',
     verdictTitle,
     // 비고 열에는 그 계측의 특이사항을 넣는다.
     // 예전에는 배치 메모를 매 행 반복해 넣어서 열이 사실상 무의미했다.
@@ -162,6 +163,25 @@ export async function deleteMeasurementFromGoogleSheets(
   });
 }
 
+/** 배치 삭제 — 시트에서 그 배치의 계측 행과 이력 행을 모두 제거 */
+export async function deleteBatchFromGoogleSheets(
+  webhookUrl: string,
+  batchCode: string
+): Promise<SyncResult> {
+  const invalid = assertUrl(webhookUrl);
+  if (invalid) return invalid;
+
+  return postToWebApp(webhookUrl, { eventType: 'batch_deleted', batchCode });
+}
+
+/** 전체 삭제 — 시트의 두 표를 헤더만 남기고 비운다 */
+export async function clearAllFromGoogleSheets(webhookUrl: string): Promise<SyncResult> {
+  const invalid = assertUrl(webhookUrl);
+  if (invalid) return invalid;
+
+  return postToWebApp(webhookUrl, { eventType: 'clear_all' });
+}
+
 /** 하역 신규 등록 / 완숙 완료 배치 이벤트 전송 */
 export async function sendBatchEventToGoogleSheets(
   webhookUrl: string,
@@ -193,7 +213,7 @@ export async function syncAllDataToGoogleSheets(
   webhookUrl: string,
   batches: Batch[],
   measurements: MeasurementLog[],
-  getVerdictTitle: (core: number, amb: number, moist: number) => string
+  getVerdictTitle: (core: number, moist: number) => string
 ): Promise<SyncResult & { count: number }> {
   const invalid = assertUrl(webhookUrl);
   if (invalid) return { ...invalid, count: 0 };
@@ -206,7 +226,7 @@ export async function syncAllDataToGoogleSheets(
   const items: GoogleSyncPayload[] = measurements.flatMap(m => {
     const b = batchMap.get(m.batchId);
     if (!b) return [];
-    return [toPayload(m, b, getVerdictTitle(m.coreTemp, m.ambientTemp, m.moisture))];
+    return [toPayload(m, b, getVerdictTitle(m.coreTemp, m.moisture))];
   });
 
   const payload: GoogleBulkSyncPayload = { isBulk: true, items };
@@ -219,6 +239,169 @@ export async function syncAllDataToGoogleSheets(
       ? `계측 기록 ${items.length}건을 시트와 일치시켰습니다.`
       : result.message,
   };
+}
+
+export interface SheetSnapshot {
+  batches: Batch[];
+  measurements: MeasurementLog[];
+  spreadsheetTitle?: string;
+  loadedAt?: string;
+}
+
+interface RawSheetBatch {
+  code?: string;
+  ranchName?: string;
+  startDate?: string;
+  completedDate?: string;
+  initialWeightKg?: number;
+  status?: string;
+  notes?: string;
+}
+
+interface RawSheetMeasurement {
+  recordKey?: string;
+  batchCode?: string;
+  dayNumber?: number;
+  date?: string;
+  time?: string;
+  coreTemp?: number;
+  moisture?: number;
+  ambientTemp?: number;
+  ambientHum?: number;
+  coreTempDelta?: number | null;
+  notes?: string;
+}
+
+/** 시트의 배치 코드로 앱 내부 id 를 만든다. 같은 코드는 항상 같은 id 가 된다. */
+export function batchIdFromCode(code: string): string {
+  return `sheet-${code}`;
+}
+
+/**
+ * 구글 시트를 원본으로 삼아 배치·계측 기록을 통째로 읽어온다.
+ * 앱은 이 결과를 화면에 그리고 localStorage 에는 오프라인 캐시로만 보관한다.
+ */
+export async function loadFromGoogleSheets(
+  webhookUrl: string,
+  toVerdict: (coreTemp: number, moisture: number) => MeasurementLog['verdict']
+): Promise<SyncResult & { snapshot?: SheetSnapshot }> {
+  const invalid = assertUrl(webhookUrl);
+  if (invalid) return invalid;
+
+  const url = `${webhookUrl}${webhookUrl.includes('?') ? '&' : '?'}action=load`;
+
+  try {
+    const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    const text = await res.text();
+
+    if (!res.ok) {
+      return { success: false, verified: true, message: `시트를 읽지 못했습니다 (HTTP ${res.status})` };
+    }
+
+    if (/^\s*</.test(text) || text.includes('accounts.google.com')) {
+      return {
+        success: false,
+        verified: true,
+        message:
+          '웹 앱이 로그인 화면을 반환했습니다. 배포 시 "액세스 권한이 있는 사용자"를 [모든 사용자]로 지정했는지 확인해주세요.',
+      };
+    }
+
+    let parsed: {
+      status?: string;
+      message?: string;
+      scriptVersion?: number;
+      batches?: RawSheetBatch[];
+      measurements?: RawSheetMeasurement[];
+      spreadsheetTitle?: string;
+      loadedAt?: string;
+    };
+
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { success: false, verified: true, message: '시트 응답을 해석할 수 없습니다. 스크립트를 최신본으로 교체해주세요.' };
+    }
+
+    const scriptVersion = Number(parsed.scriptVersion) || 1;
+
+    if (parsed.status === 'error') {
+      return { success: false, verified: true, scriptVersion, message: parsed.message || '시트에서 오류를 반환했습니다.' };
+    }
+
+    // 구버전 스크립트는 batches/measurements 를 아예 주지 않는다
+    if (!Array.isArray(parsed.batches) || !Array.isArray(parsed.measurements)) {
+      return {
+        success: false,
+        verified: true,
+        scriptVersion,
+        message: `시트에서 데이터를 읽으려면 스크립트 v${REQUIRED_SCRIPT_VERSION} 이상이 필요합니다. 연동 마법사에서 최신 코드로 재배포해주세요.`,
+      };
+    }
+
+    const batches: Batch[] = parsed.batches
+      .filter(b => b.code)
+      .map(b => ({
+        id: batchIdFromCode(b.code as string),
+        code: b.code as string,
+        ranchName: b.ranchName || '목장 미지정',
+        startDate: b.startDate || '',
+        completedDate: b.completedDate || undefined,
+        initialWeightKg: Number(b.initialWeightKg) || 0,
+        status: b.status === 'completed' ? 'completed' : 'fermenting',
+        notes: b.notes || undefined,
+      }));
+
+    const knownCodes = new Set(batches.map(b => b.code));
+
+    const measurements: MeasurementLog[] = parsed.measurements
+      .filter(m => m.batchCode && knownCodes.has(m.batchCode) && m.dayNumber)
+      .map(m => {
+        const coreTemp = Number(m.coreTemp) || 0;
+        const moisture = Number(m.moisture) || 0;
+        return {
+          // 시트의 레코드 키가 곧 고유 id. 같은 행은 언제 읽어도 같은 id 가 된다.
+          id: m.recordKey || `${m.batchCode}|D${m.dayNumber}`,
+          batchId: batchIdFromCode(m.batchCode as string),
+          dayNumber: Number(m.dayNumber),
+          date: m.date || '',
+          time: m.time || '',
+          coreTemp,
+          moisture,
+          ambientTemp: Number(m.ambientTemp) || 0,
+          ambientHum: Number(m.ambientHum) || 0,
+          coreTempDelta:
+            m.coreTempDelta === null || m.coreTempDelta === undefined
+              ? undefined
+              : Number(m.coreTempDelta),
+          // 판정은 저장된 문구를 믿지 않고 현재 기준으로 다시 계산한다
+          verdict: toVerdict(coreTemp, moisture),
+          notes: m.notes || undefined,
+        };
+      });
+
+    return {
+      success: true,
+      verified: true,
+      scriptVersion,
+      message: `시트에서 배치 ${batches.length}건 · 계측 ${measurements.length}건을 불러왔습니다.`,
+      snapshot: {
+        batches,
+        measurements,
+        spreadsheetTitle: parsed.spreadsheetTitle,
+        loadedAt: parsed.loadedAt,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      verified: false,
+      message:
+        error instanceof Error
+          ? `시트에 연결하지 못했습니다: ${error.message}`
+          : '시트에 연결하지 못했습니다.',
+    };
+  }
 }
 
 /** 웹 앱 URL 연결 테스트 */

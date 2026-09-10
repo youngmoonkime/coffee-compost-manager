@@ -5,27 +5,11 @@ import type { BatchStatus, CompostSettings, VerdictInfo } from '../types';
  */
 export function evaluateFermentation(
   coreTemp: number,
-  ambientTemp: number,
   moisture: number,
   settings: CompostSettings
 ): VerdictInfo {
-  const tempDiff = Math.max(0, coreTemp - ambientTemp);
-
-  // 1. 완숙 투입 가능 적합 조건: 함수율 <= 45% AND 외기-심부 온도차 <= 10℃
-  if (moisture <= settings.targetMoistureThreshold && tempDiff <= settings.targetTempDiffThreshold) {
-    return {
-      type: 'ready',
-      title: '완숙 투입 가능',
-      subtitle: '축사 깔짚 투입 기준 적합 (부숙 완료)',
-      icon: 'task_alt',
-      badgeText: '완숙적합',
-      bannerClass: 'bg-primary-fixed text-on-primary-fixed border border-primary/20',
-      titleClass: 'text-primary font-bold',
-      iconClass: 'text-primary',
-    };
-  }
-
-  // 2. 개입 필요 (과열 또는 과습): 함수율 > 65% OR 심부온도 > 65℃
+  // 1. 개입 필요 (과열 또는 과습): 함수율 > 65% OR 심부온도 > 65℃
+  //    과열은 함수율이 낮아도 우선 조치해야 하므로 완숙 판정보다 먼저 본다.
   if (moisture > settings.highMoistureThreshold || coreTemp > settings.highTempThreshold) {
     return {
       type: 'action_needed',
@@ -36,6 +20,22 @@ export function evaluateFermentation(
       bannerClass: 'bg-error-container text-on-error-container border border-error/20',
       titleClass: 'text-error font-bold',
       iconClass: 'text-error',
+    };
+  }
+
+  // 2. 완숙 투입 가능: 심부 함수율이 기준 이하
+  //    (예전에는 외기-심부 온도차도 조건이었으나, 심부온도는 외기와 비교하는 값이 아니라
+  //     같은 더미를 기간을 두고 재측정해 추이로 보는 값이라 판정에서 제외했다)
+  if (moisture <= settings.targetMoistureThreshold) {
+    return {
+      type: 'ready',
+      title: '완숙 투입 가능',
+      subtitle: '축사 깔짚 투입 기준 적합 (부숙 완료)',
+      icon: 'task_alt',
+      badgeText: '완숙적합',
+      bannerClass: 'bg-primary-fixed text-on-primary-fixed border border-primary/20',
+      titleClass: 'text-primary font-bold',
+      iconClass: 'text-primary',
     };
   }
 

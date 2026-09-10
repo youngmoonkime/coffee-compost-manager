@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
 import { evaluateFermentation } from '../../utils/calculations';
@@ -12,7 +12,9 @@ const QUICK_NOTES = ['교반 실시', '침출수 발생', '악취 심함', '강�
 
 const NOTE_SEPARATOR = ', ';
 
-/** 특이사항 문구를 항목 단위로 분해 */
+/** 값을 다 입력했다고 보고 다음 단계로 넘어가기까지 기다리는 시간 */
+const AUTO_ADVANCE_DELAY = 800;
+
 function splitNotes(text: string): string[] {
   return text.split(NOTE_SEPARATOR).map(t => t.trim()).filter(Boolean);
 }
@@ -30,34 +32,121 @@ function toggleNote(text: string, preset: string): string {
   return parts.join(NOTE_SEPARATOR);
 }
 
+/** 입력 문자열이 유효한 숫자인지 (빈 값·부분 입력은 아직 아님) */
+function parseValue(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === '-' || trimmed === '.' || trimmed === '-.') return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : null;
+}
+
+const STEPS = [
+  { id: 'core', title: '심부 온도' },
+  { id: 'moisture', title: '심부 함수율' },
+  { id: 'ambient', title: '외기 환경' },
+  { id: 'review', title: '확인 및 저장' },
+] as const;
+
+const LAST_STEP = STEPS.length - 1;
+
+/** iOS 스타일 대형 숫자 입력 */
+const BigNumberField: React.FC<{
+  value: string;
+  unit: string;
+  step: number;
+  placeholder: string;
+  label: string;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+}> = ({ value, unit, step, placeholder, label, onChange, onCommit }) => (
+  <div className="flex items-baseline justify-center gap-1 py-2">
+    <input
+      type="number"
+      inputMode="decimal"
+      step={step}
+      value={value}
+      placeholder={placeholder}
+      autoFocus
+      aria-label={label}
+      onChange={e => onChange(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          onCommit();
+        }
+      }}
+      className="w-[4.5ch] bg-transparent text-center font-display-metric text-[56px] leading-none font-semibold text-on-surface tabular-nums tracking-tight focus:outline-none caret-primary placeholder:text-outline/30"
+    />
+    <span className="font-display-metric text-[22px] font-medium text-outline">{unit}</span>
+  </div>
+);
+
+/** iOS 그룹 리스트 한 줄 */
+const SummaryRow: React.FC<{ label: string; value: string; emphasis?: boolean }> = ({
+  label,
+  value,
+  emphasis,
+}) => (
+  <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/20 last:border-b-0">
+    <span className="font-body-sm text-[15px] text-on-surface-variant">{label}</span>
+    <span
+      className={`font-label-numeric text-[15px] tabular-nums ${
+        emphasis ? 'text-primary font-bold' : 'text-on-surface font-semibold'
+      }`}
+    >
+      {value}
+    </span>
+  </div>
+);
+
 const MeasurementInputGridComponent: React.FC<MeasurementInputGridProps> = ({ onLiveChange }) => {
-  const { latestLog, addMeasurementLog, settings, activeBatch, googleConfig, isSyncing, isActiveBatchCompleted, daysElapsed } = useCompost();
+  const {
+    activeBatchMeasurements,
+    addMeasurementLog,
+    settings,
+    activeBatch,
+    googleConfig,
+    isSyncing,
+    isActiveBatchCompleted,
+    daysElapsed,
+  } = useCompost();
   const { showToast } = useToast();
 
-  const [coreTemp, setCoreTemp] = useState<number>(latestLog?.coreTemp ?? 38.0);
-  const [moisture, setMoisture] = useState<number>(latestLog?.moisture ?? 49.0);
-  const [ambientTemp, setAmbientTemp] = useState<number>(latestLog?.ambientTemp ?? 24.0);
-  const [ambientHum, setAmbientHum] = useState<number>(latestLog?.ambientHum ?? 62.0);
-  const [notes, setNotes] = useState<string>('');
+  // 입력은 항상 빈 칸에서 시작한다. 이전 값을 채워두면 재보지 않고 그대로 저장되기 쉽다.
+  const [coreTempRaw, setCoreTempRaw] = useState('');
+  const [moistureRaw, setMoistureRaw] = useState('');
+  const [ambientTempRaw, setAmbientTempRaw] = useState('');
+  const [ambientHumRaw, setAmbientHumRaw] = useState('');
+  const [notes, setNotes] = useState('');
 
-  // 활성 배치나 최신 로그가 변경될 때 기본값 동기화 (로그 자체가 교체될 때만)
-  useEffect(() => {
-    if (!latestLog) return;
-    setCoreTemp(latestLog.coreTemp);
-    setMoisture(latestLog.moisture);
-    setAmbientTemp(latestLog.ambientTemp);
-    setAmbientHum(latestLog.ambientHum);
-  }, [latestLog?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [stepIndex, setStepIndex] = useState(0);
+  const [direction, setDirection] = useState<'forward' | 'backward'>('forward');
 
-  /**
-   * 특이사항은 계측 시점의 사건이므로 다른 값처럼 무조건 이어받으면 안 된다.
-   * 오늘자 기록을 다시 저장하는 경우(같은 일차)에만 기존 문구를 불러오고,
-   * 새 날짜의 계측에서는 비운다. 안 그러면 어제의 '교반 실시'가 오늘 기록에 그대로 복사된다.
-   */
+  const coreTemp = parseValue(coreTempRaw);
+  const moisture = parseValue(moistureRaw);
+  const ambientTemp = parseValue(ambientTempRaw);
+  const ambientHum = parseValue(ambientHumRaw);
+
+  /** 직전 계측 — 심부온도는 이 값과 비교해서 추이를 본다 */
+  const previousLog = useMemo(() => {
+    const earlier = activeBatchMeasurements.filter(m => m.dayNumber < daysElapsed);
+    return earlier[earlier.length - 1];
+  }, [activeBatchMeasurements, daysElapsed]);
+
+  const resetForm = useCallback(() => {
+    setCoreTempRaw('');
+    setMoistureRaw('');
+    setAmbientTempRaw('');
+    setAmbientHumRaw('');
+    setNotes('');
+    setDirection('backward');
+    setStepIndex(0);
+  }, []);
+
+  // 배치를 바꾸면 입력을 처음부터 다시 받는다
   useEffect(() => {
-    const isEditingSameDay = latestLog?.dayNumber === daysElapsed;
-    setNotes(isEditingSameDay ? latestLog?.notes ?? '' : '');
-  }, [latestLog?.id, daysElapsed]); // eslint-disable-line react-hooks/exhaustive-deps
+    resetForm();
+  }, [activeBatch?.id, resetForm]);
 
   // 부모가 콜백을 memo 하지 않아도 무한 루프가 나지 않도록 ref 로 최신 콜백만 보관한다.
   const onLiveChangeRef = useRef(onLiveChange);
@@ -65,17 +154,50 @@ const MeasurementInputGridComponent: React.FC<MeasurementInputGridProps> = ({ on
     onLiveChangeRef.current = onLiveChange;
   });
 
-  // 실시간 변경 콜백 — 의존성은 "값"만. 콜백 참조는 의존성에서 제외.
+  // 실시간 판정 미리보기 — 값이 다 들어온 뒤에만 의미가 있다
   useEffect(() => {
-    onLiveChangeRef.current?.(coreTemp, ambientTemp, moisture);
+    if (coreTemp === null || moisture === null) return;
+    onLiveChangeRef.current?.(coreTemp, ambientTemp ?? 0, moisture);
   }, [coreTemp, ambientTemp, moisture]);
 
-  const tempDiff = Math.max(0, coreTemp - ambientTemp);
+  const goNext = useCallback(() => {
+    setDirection('forward');
+    setStepIndex(i => Math.min(LAST_STEP, i + 1));
+  }, []);
+
+  const goBack = useCallback(() => {
+    setDirection('backward');
+    setStepIndex(i => Math.max(0, i - 1));
+  }, []);
+
+  /**
+   * 값 입력이 끝나면 버튼 없이 다음 단계로 넘어간다.
+   * 타이핑 도중(예: '4' 를 치고 '5' 를 칠 참)에 넘어가지 않도록 잠깐 기다린다.
+   */
+  const currentStepReady =
+    stepIndex === 0 ? coreTemp !== null
+    : stepIndex === 1 ? moisture !== null
+    : stepIndex === 2 ? ambientTemp !== null && ambientHum !== null
+    : false;
+
+  useEffect(() => {
+    if (stepIndex >= LAST_STEP || !currentStepReady) return;
+    const timer = setTimeout(goNext, AUTO_ADVANCE_DELAY);
+    return () => clearTimeout(timer);
+  }, [stepIndex, currentStepReady, coreTempRaw, moistureRaw, ambientTempRaw, ambientHumRaw, goNext]);
 
   const isGoogleLinked = useMemo(
     () => Boolean(googleConfig.autoSync && googleConfig.sheetWebhookUrl),
     [googleConfig.autoSync, googleConfig.sheetWebhookUrl]
   );
+
+  const verdict = useMemo(
+    () => evaluateFermentation(coreTemp ?? 0, moisture ?? 0, settings),
+    [coreTemp, moisture, settings]
+  );
+
+  const coreTempDelta =
+    coreTemp !== null && previousLog ? coreTemp - previousLog.coreTemp : null;
 
   const handleSaveData = async () => {
     if (!activeBatch) {
@@ -92,226 +214,322 @@ const MeasurementInputGridComponent: React.FC<MeasurementInputGridProps> = ({ on
       return;
     }
 
-    await addMeasurementLog(
-      {
-        coreTemp,
-        moisture,
-        ambientTemp,
-        ambientHum,
-        notes,
-      },
-      () => {
-        showToast('구글 시트 실시간 반영 성공!', `${activeBatch.code} 행이 스프레드시트에 추가되었습니다`, 'success');
-      }
+    if (coreTemp === null || moisture === null || ambientTemp === null || ambientHum === null) {
+      showToast('입력이 완료되지 않았습니다', '비어 있는 항목을 채워주세요', 'warning');
+      return;
+    }
+
+    const result = await addMeasurementLog({ coreTemp, moisture, ambientTemp, ambientHum, notes });
+
+    if (!result.saved) {
+      showToast('저장하지 못했습니다', result.message, 'error');
+      return;
+    }
+
+    // 알림은 한 번만. 시트 반영 여부는 부제목으로 알린다.
+    const sheetNote =
+      result.sheet === 'synced' ? '구글 시트에 반영됨'
+      : result.sheet === 'unverified' ? '시트 전송함 (반영 여부 미확인)'
+      : result.sheet === 'failed' ? '시트 전송 실패 — 앱에는 저장됨'
+      : '앱에 저장됨';
+
+    showToast(
+      `D+${daysElapsed}일차 계측 저장 완료`,
+      `${verdict.title} · ${sheetNote}`,
+      result.sheet === 'failed' ? 'warning' : 'success'
     );
+    resetForm();
+  };
 
-    const verdict = evaluateFermentation(coreTemp, ambientTemp, moisture, settings);
-    const subMsg = isGoogleLinked
-      ? `구글 스프레드시트에 실시간 자동 기록됨 · ${verdict.title}`
-      : `D일차 동기화 완료 · ${verdict.title}`;
+  const step = STEPS[stepIndex];
+  const animClass = direction === 'forward' ? 'step-forward' : 'step-backward';
+  const progress = ((stepIndex + 1) / STEPS.length) * 100;
 
-    showToast('측정 데이터가 안전하게 저장되었습니다', subMsg, 'success');
-    setNotes('');
+  const renderStepBody = () => {
+    switch (step.id) {
+      case 'core':
+        return (
+          <>
+            <p className="font-body-sm text-[13.5px] text-on-surface-variant mb-4 break-keep leading-relaxed">
+              더미 표면에서 <strong className="text-on-surface">{settings.coreProbeDepthCm}cm 이내</strong> 깊이에
+              탐침을 꽂고 안정된 값을 읽어주세요.
+            </p>
+
+            <BigNumberField
+              label="심부 온도(℃)"
+              value={coreTempRaw}
+              unit="℃"
+              step={0.5}
+              placeholder="--"
+              onChange={setCoreTempRaw}
+              onCommit={goNext}
+            />
+
+            {previousLog ? (
+              <div className="mt-2 rounded-2xl bg-surface-container-low px-4 py-3 soft-rise">
+                <div className="flex items-center justify-between">
+                  <span className="font-caption text-[12px] text-on-surface-variant">
+                    직전 계측 (D+{previousLog.dayNumber} · {previousLog.date})
+                  </span>
+                  <span className="font-label-numeric text-[14px] font-semibold text-on-surface tabular-nums">
+                    {previousLog.coreTemp} ℃
+                  </span>
+                </div>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="font-caption text-[12px] text-on-surface-variant">측정 간격</span>
+                  <span className="font-label-numeric text-[13px] font-semibold text-secondary tabular-nums">
+                    {daysElapsed - previousLog.dayNumber}일 만
+                  </span>
+                </div>
+                {previousLog && (
+                <SummaryRow label="직전 계측 간격" value={`${daysElapsed - previousLog.dayNumber}일`} />
+              )}
+              {coreTempDelta !== null && (
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-outline-variant/20">
+                    <span className="font-caption text-[12px] text-on-surface-variant">변화</span>
+                    <span
+                      className={`font-label-numeric text-[14px] font-bold tabular-nums ${
+                        coreTempDelta < 0 ? 'text-primary' : coreTempDelta > 0 ? 'text-error' : 'text-outline'
+                      }`}
+                    >
+                      {coreTempDelta > 0 ? '+' : ''}
+                      {coreTempDelta.toFixed(1)} ℃
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-center font-caption text-[12px] text-outline break-keep">
+                첫 계측입니다. 기준값이 되며, 다음 계측 때 이 값과 비교합니다.
+              </p>
+            )}
+          </>
+        );
+
+      case 'moisture':
+        return (
+          <>
+            <p className="font-body-sm text-[13.5px] text-on-surface-variant mb-4 break-keep leading-relaxed">
+              심부 시료의 수분 함량입니다. 완숙 판정의 기준이 됩니다.
+            </p>
+
+            <BigNumberField
+              label="심부 함수율(%)"
+              value={moistureRaw}
+              unit="%"
+              step={1}
+              placeholder="--"
+              onChange={setMoistureRaw}
+              onCommit={goNext}
+            />
+
+            <div className="flex justify-center mt-1">
+              <span className="px-3 py-1 rounded-full bg-primary-fixed-dim text-on-primary-fixed font-caption text-[12px] font-semibold">
+                완숙 기준 ≤ {settings.targetMoistureThreshold}%
+              </span>
+            </div>
+          </>
+        );
+
+      case 'ambient':
+        return (
+          <>
+            <p className="font-body-sm text-[13.5px] text-on-surface-variant mb-4 break-keep leading-relaxed">
+              축사 내부의 현재 온도와 습도입니다. 참고 기록용입니다.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-surface-container-low rounded-2xl py-3">
+                <span className="block text-center font-caption text-[12px] text-on-surface-variant mb-1">
+                  외기 온도
+                </span>
+                <div className="flex items-baseline justify-center gap-0.5">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={0.5}
+                    value={ambientTempRaw}
+                    placeholder="--"
+                    autoFocus
+                    aria-label="외기 온도(℃)"
+                    onChange={e => setAmbientTempRaw(e.target.value)}
+                    className="w-[4ch] bg-transparent text-center font-display-metric text-[34px] leading-none font-semibold text-on-surface tabular-nums focus:outline-none caret-primary placeholder:text-outline/30"
+                  />
+                  <span className="font-display-metric text-[15px] text-outline">℃</span>
+                </div>
+              </div>
+
+              <div className="bg-surface-container-low rounded-2xl py-3">
+                <span className="block text-center font-caption text-[12px] text-on-surface-variant mb-1">
+                  외기 습도
+                </span>
+                <div className="flex items-baseline justify-center gap-0.5">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={1}
+                    value={ambientHumRaw}
+                    placeholder="--"
+                    aria-label="외기 습도(%)"
+                    onChange={e => setAmbientHumRaw(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (ambientTemp !== null && ambientHum !== null) goNext();
+                      }
+                    }}
+                    className="w-[4ch] bg-transparent text-center font-display-metric text-[34px] leading-none font-semibold text-on-surface tabular-nums focus:outline-none caret-primary placeholder:text-outline/30"
+                  />
+                  <span className="font-display-metric text-[15px] text-outline">%</span>
+                </div>
+              </div>
+            </div>
+          </>
+        );
+
+      case 'review':
+        return (
+          <>
+            <p className="font-body-sm text-[13.5px] text-on-surface-variant mb-4 break-keep leading-relaxed">
+              저장 전 값을 확인하고, 특이사항이 있으면 함께 남겨주세요.
+            </p>
+
+            <div className={`${verdict.bannerClass} rounded-2xl px-4 py-3 flex items-center gap-3 soft-rise`}>
+              <span className={`material-symbols-outlined text-[24px] ${verdict.iconClass}`}>
+                {verdict.icon}
+              </span>
+              <div className="min-w-0">
+                <span className={`block font-headline-sm text-[15px] ${verdict.titleClass}`}>
+                  {verdict.title}
+                </span>
+                <span className="block font-caption text-[11.5px] opacity-90 break-keep">
+                  {verdict.subtitle}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-3 bg-surface-container-low rounded-2xl overflow-hidden soft-rise stagger-1">
+              <SummaryRow label={`심부 온도 (${settings.coreProbeDepthCm}cm)`} value={`${coreTempRaw || '--'} ℃`} />
+              {coreTempDelta !== null && (
+                <SummaryRow
+                  label="직전 계측 대비"
+                  value={`${coreTempDelta > 0 ? '+' : ''}${coreTempDelta.toFixed(1)} ℃`}
+                />
+              )}
+              <SummaryRow label="심부 함수율" value={`${moistureRaw || '--'} %`} emphasis />
+              <SummaryRow label="외기 온도" value={`${ambientTempRaw || '--'} ℃`} />
+              <SummaryRow label="외기 습도" value={`${ambientHumRaw || '--'} %`} />
+              <SummaryRow label="기록 일차" value={`D+${daysElapsed}`} />
+            </div>
+
+            {/* 특이사항 */}
+            <div className="mt-3 soft-rise stagger-2">
+              <span className="block font-label-sm text-[13px] font-semibold text-on-surface mb-2">
+                특이사항 <span className="font-caption text-[11px] text-outline font-normal">선택</span>
+              </span>
+
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_NOTES.map(preset => {
+                  const active = hasNote(notes, preset);
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setNotes(prev => toggleNote(prev, preset))}
+                      className={`px-3 py-1.5 rounded-full font-caption text-[12.5px] font-semibold transition-all active:scale-95 ${
+                        active
+                          ? 'bg-primary text-on-primary shadow-sm'
+                          : 'bg-surface-container text-on-surface-variant'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <textarea
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                rows={2}
+                maxLength={200}
+                placeholder="예) 우측 더미 하단 침출수 고임, 송풍기 1시간 가동"
+                className="mt-2 w-full bg-surface-container-low rounded-2xl px-3.5 py-3 text-[14px] text-on-surface border border-transparent focus:outline-none focus:border-primary/50 placeholder:text-outline/70 resize-none leading-relaxed"
+              />
+            </div>
+          </>
+        );
+    }
   };
 
   return (
     <section className="w-full mb-3">
-      <div className="flex items-center justify-between mb-2 px-1">
-        <div className="flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-primary text-[18px]">edit_note</span>
-          <h3 className="font-headline-sm text-[15px] font-bold text-on-surface tracking-tight whitespace-nowrap">
-            현장 실측값 입력
+      <div className="bg-surface-container-lowest rounded-[22px] border border-outline-variant/20 shadow-sm overflow-hidden">
+        {/* 진행 표시 */}
+        <div className="px-5 pt-4">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="font-caption text-[11.5px] font-semibold text-outline tabular-nums">
+              {stepIndex + 1} / {STEPS.length}
+            </span>
+            <span className="font-caption text-[11.5px] text-outline">현장 실측값 입력</span>
+          </div>
+          <div className="h-1 rounded-full bg-surface-container-high overflow-hidden">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-[380ms] ease-[cubic-bezier(0.32,0.72,0,1)]"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+
+        {/* 단계 본문 — key 를 바꿔 매 단계마다 등장 애니메이션이 다시 실행되게 한다 */}
+        <div key={step.id} className={`px-5 pt-5 pb-4 ${animClass}`}>
+          <h3 className="font-headline-md text-[24px] font-bold text-on-surface tracking-tight">
+            {step.title}
           </h3>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        {/* 1. 심부 온도 */}
-        <div className="bg-surface-container-lowest p-2.5 rounded-xl shadow-sm border border-outline-variant/20 flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-1">
-            <span className="font-label-sm text-[12px] font-semibold text-on-surface whitespace-nowrap">심부 온도</span>
-            <span className="px-1.5 py-0.5 rounded-full bg-secondary-fixed text-on-secondary-fixed font-caption text-[10px] font-bold whitespace-nowrap">
-              권장 40~60℃
-            </span>
-          </div>
-
-          <div className="my-1 text-center">
-            <div className="flex items-center justify-center">
-              <input
-                className="w-16 sm:w-20 text-center font-display-metric text-[22px] sm:text-[24px] font-bold text-primary bg-transparent focus:outline-none selection:bg-primary-fixed tabular-nums"
-                id="input-core-temp"
-                step="0.5"
-                type="number"
-                value={coreTemp}
-                onChange={(e) => setCoreTemp(parseFloat(e.target.value) || 0)}
-              />
-              <span className="font-display-metric text-[14px] text-outline ml-0.5">℃</span>
-            </div>
-          </div>
+          {renderStepBody()}
         </div>
 
-        {/* 2. 심부 함수율 */}
-        <div className="bg-surface-container-lowest p-2.5 rounded-xl shadow-sm border border-outline-variant/20 flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-1">
-            <span className="font-label-sm text-[12px] font-semibold text-on-surface whitespace-nowrap">심부 함수율</span>
-            <span className="px-1.5 py-0.5 rounded-full bg-primary-fixed-dim text-on-primary-fixed font-caption text-[10px] font-bold whitespace-nowrap">
-              기준 ≤{settings.targetMoistureThreshold}%
-            </span>
-          </div>
-
-          <div className="my-1 text-center">
-            <div className="flex items-center justify-center">
-              <input
-                className="w-16 sm:w-20 text-center font-display-metric text-[22px] sm:text-[24px] font-bold text-secondary bg-transparent focus:outline-none selection:bg-secondary-fixed tabular-nums"
-                id="input-moisture"
-                step="1"
-                type="number"
-                value={moisture}
-                onChange={(e) => setMoisture(parseFloat(e.target.value) || 0)}
-              />
-              <span className="font-display-metric text-[14px] text-outline ml-0.5">%</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 3. 현재 외기온 */}
-        <div className="bg-surface-container-lowest p-2.5 rounded-xl shadow-sm border border-outline-variant/20 flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-1">
-            <span className="font-label-sm text-[12px] font-semibold text-on-surface whitespace-nowrap">현재 외기온</span>
-            <span className="px-1.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-caption text-[10px] whitespace-nowrap">
-              축사 내부
-            </span>
-          </div>
-
-          <div className="my-1 text-center">
-            <div className="flex items-center justify-center">
-              <input
-                className="w-16 sm:w-20 text-center font-display-metric text-[22px] sm:text-[24px] font-bold text-on-surface bg-transparent focus:outline-none tabular-nums"
-                id="input-ambient-temp"
-                step="0.5"
-                type="number"
-                value={ambientTemp}
-                onChange={(e) => setAmbientTemp(parseFloat(e.target.value) || 0)}
-              />
-              <span className="font-display-metric text-[14px] text-outline ml-0.5">℃</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 4. 현재 외기습도 */}
-        <div className="bg-surface-container-lowest p-2.5 rounded-xl shadow-sm border border-outline-variant/20 flex flex-col justify-between">
-          <div className="flex items-center justify-between gap-1">
-            <span className="font-label-sm text-[12px] font-semibold text-on-surface whitespace-nowrap">현재 외기습도</span>
-            <span className="px-1.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-caption text-[10px] whitespace-nowrap">
-              상대습도
-            </span>
-          </div>
-
-          <div className="my-1 text-center">
-            <div className="flex items-center justify-center">
-              <input
-                className="w-16 sm:w-20 text-center font-display-metric text-[22px] sm:text-[24px] font-bold text-on-surface bg-transparent focus:outline-none tabular-nums"
-                id="input-ambient-hum"
-                step="1"
-                type="number"
-                value={ambientHum}
-                onChange={(e) => setAmbientHum(parseFloat(e.target.value) || 0)}
-              />
-              <span className="font-display-metric text-[14px] text-outline ml-0.5">%</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 외기-심부 온도차 자동 산출 바 */}
-      <div className="mt-1.5 bg-surface-container-high/60 rounded-xl px-3 py-1.5 flex items-center justify-between border border-outline-variant/20">
-        <div className="flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[16px] text-secondary">difference</span>
-          <span className="font-body-sm text-[12px] text-on-surface-variant whitespace-nowrap">
-            외기-심부 온도차 산출
-          </span>
-        </div>
-        <div className="font-label-numeric text-[13px] font-bold text-primary" id="temp-diff-display">
-          {tempDiff.toFixed(1)} ℃
-        </div>
-      </div>
-
-      {/* 특이사항 입력 — 시트의 비고 열에 그대로 기록된다 */}
-      <div className="mt-1.5 bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-2.5">
-        <div className="flex items-center justify-between mb-1.5">
-          <div className="flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[16px] text-secondary">sticky_note_2</span>
-            <span className="font-label-sm text-[12px] font-semibold text-on-surface whitespace-nowrap">
-              특이사항
-            </span>
-            <span className="font-caption text-[10px] text-outline whitespace-nowrap">선택</span>
-          </div>
-          {notes.trim() && (
+        {/* 하단 액션 — 값 입력 단계는 자동으로 넘어가므로 '다음' 버튼이 없다 */}
+        <div className="px-5 pb-5 pt-1 flex items-center gap-2.5">
+          {stepIndex > 0 && (
             <button
               type="button"
-              onClick={() => setNotes('')}
-              className="font-caption text-[10.5px] text-outline hover:text-error"
+              onClick={goBack}
+              className="h-[52px] px-5 rounded-2xl bg-surface-container text-on-surface-variant font-headline-sm text-[16px] font-semibold active:scale-[0.97] transition-transform shrink-0"
             >
-              지우기
+              이전
+            </button>
+          )}
+
+          {stepIndex < LAST_STEP ? (
+            <div className="flex-1 h-[52px] flex items-center justify-center">
+              <span className="font-caption text-[12.5px] text-outline break-keep text-center">
+                {currentStepReady ? '다음 단계로 넘어갑니다…' : '값을 입력하면 자동으로 넘어갑니다'}
+              </span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSaveData}
+              disabled={isSyncing || isActiveBatchCompleted}
+              className="flex-1 h-[52px] rounded-2xl bg-primary text-on-primary font-headline-sm text-[17px] font-semibold shadow-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-transform disabled:opacity-50"
+            >
+              <span className={`material-symbols-outlined text-[20px] ${isSyncing ? 'animate-spin' : ''}`}>
+                {isActiveBatchCompleted ? 'lock' : isSyncing ? 'sync' : 'check_circle'}
+              </span>
+              <span className="truncate">
+                {isActiveBatchCompleted
+                  ? '완료된 배치'
+                  : isSyncing
+                  ? '기록 중...'
+                  : isGoogleLinked
+                  ? '저장 및 시트 전송'
+                  : '계측 저장'}
+              </span>
             </button>
           )}
         </div>
-
-        {/* 자주 쓰는 항목 — 장갑 낀 손으로도 한 번에 입력 */}
-        <div className="flex flex-wrap gap-1 mb-1.5">
-          {QUICK_NOTES.map(preset => {
-            const active = hasNote(notes, preset);
-            return (
-              <button
-                key={preset}
-                type="button"
-                onClick={() => setNotes(prev => toggleNote(prev, preset))}
-                className={`px-2 py-1 rounded-lg font-caption text-[11px] font-semibold transition-all active:scale-95 ${
-                  active
-                    ? 'bg-secondary-container text-on-secondary-container ring-1 ring-secondary/40'
-                    : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
-                }`}
-              >
-                {preset}
-              </button>
-            );
-          })}
-        </div>
-
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={2}
-          maxLength={200}
-          placeholder="예) 우측 더미 하단 침출수 고임, 송풍기 1시간 가동"
-          className="w-full bg-surface-container-low rounded-lg px-2.5 py-2 text-[12px] text-on-surface border border-outline-variant/30 focus:outline-none focus:border-primary placeholder:text-outline/70 resize-none leading-relaxed"
-        />
-        <div className="flex justify-end mt-0.5">
-          <span className="font-caption text-[10px] text-outline tabular-nums">{notes.length}/200</span>
-        </div>
       </div>
-
-      {/* 데이터 저장 및 상태 갱신 버튼 */}
-      <button
-        onClick={handleSaveData}
-        disabled={isSyncing || isActiveBatchCompleted}
-        className="w-full mt-2 h-12 bg-primary hover:bg-primary/90 active:bg-primary-container text-on-primary font-headline-sm text-[14px] font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 active:scale-[0.99] transition-all whitespace-nowrap cursor-pointer disabled:opacity-75"
-        id="save-data-btn"
-        type="button"
-      >
-        <span className={`material-symbols-outlined text-[20px] ${isSyncing ? 'animate-spin' : ''}`}>
-          {isActiveBatchCompleted ? 'lock' : isSyncing ? 'sync' : 'cloud_upload'}
-        </span>
-        <span>
-          {isActiveBatchCompleted
-            ? '완숙 완료된 배치 — 계측 추가 불가'
-            : isSyncing
-            ? '구글 시트에 실시간 기록 중...'
-            : googleConfig.sheetWebhookUrl
-            ? '현장 데이터 저장 및 구글 시트 실시간 전송'
-            : '현장 데이터 저장 및 판정 반영'}
-        </span>
-      </button>
     </section>
   );
 };

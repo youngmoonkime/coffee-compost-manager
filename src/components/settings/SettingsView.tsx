@@ -11,7 +11,7 @@ export const SettingsView: React.FC = () => {
 
   // 판정 기준 상태
   const [targetMoisture, setTargetMoisture] = useState<number>(settings.targetMoistureThreshold);
-  const [targetTempDiff, setTargetTempDiff] = useState<number>(settings.targetTempDiffThreshold);
+  const [probeDepth, setProbeDepth] = useState<number>(settings.coreProbeDepthCm);
   const [highMoisture, setHighMoisture] = useState<number>(settings.highMoistureThreshold);
   const [highTemp, setHighTemp] = useState<number>(settings.highTempThreshold);
 
@@ -30,7 +30,7 @@ export const SettingsView: React.FC = () => {
     e.preventDefault();
     updateSettings({
       targetMoistureThreshold: targetMoisture,
-      targetTempDiffThreshold: targetTempDiff,
+      coreProbeDepthCm: probeDepth,
       highMoistureThreshold: highMoisture,
       highTempThreshold: highTemp,
     });
@@ -43,23 +43,27 @@ export const SettingsView: React.FC = () => {
 
   const handleResetDefaults = () => {
     setTargetMoisture(DEFAULT_SETTINGS.targetMoistureThreshold);
-    setTargetTempDiff(DEFAULT_SETTINGS.targetTempDiffThreshold);
+    setProbeDepth(DEFAULT_SETTINGS.coreProbeDepthCm);
     setHighMoisture(DEFAULT_SETTINGS.highMoistureThreshold);
     setHighTemp(DEFAULT_SETTINGS.highTempThreshold);
     updateSettings(DEFAULT_SETTINGS);
     showToast('기본 설정값으로 초기화되었습니다', undefined, 'info');
   };
 
-  const handleResetBatchData = () => {
+  const handleResetBatchData = async () => {
     const confirmed = window.confirm(
       '배치와 계측 기록을 모두 삭제합니다.\n' +
-      '앱은 완전히 빈 상태가 되며, 되돌릴 수 없습니다.\n\n' +
-      '(구글 시트에 이미 기록된 행과 연동 설정은 그대로 유지됩니다)\n\n계속할까요?'
+      '앱과 구글 시트 양쪽에서 지워지며, 되돌릴 수 없습니다.\n\n' +
+      '(연동 설정과 판정 임계값은 유지됩니다)\n\n계속할까요?'
     );
     if (!confirmed) return;
 
-    resetBatchData();
-    showToast('모든 이력을 삭제했습니다', '[새 하역 등록]으로 처음부터 시작할 수 있습니다', 'info');
+    const res = await resetBatchData();
+    showToast(
+      '모든 이력을 삭제했습니다',
+      res.success ? res.message : `시트 반영 실패 — ${res.message}`,
+      res.success ? 'info' : 'warning'
+    );
   };
 
   const handleTestConnection = async () => {
@@ -126,23 +130,27 @@ export const SettingsView: React.FC = () => {
             </button>
           </div>
 
-          {/* 자동 동기화 토글 */}
-          <div className="flex items-center justify-between p-2.5 rounded-xl bg-surface-container-low">
-            <div className="flex flex-col">
-              <span className="font-label-md text-xs font-bold text-on-surface">측정 저장 시 자동 전송</span>
-              <span className="font-caption text-[10.5px] text-outline">
-                현장 데이터 저장 버튼을 누를 때마다 시트에 실시간 반영
+          {/* 연동 상태 — 켜고 끄는 스위치가 아니라 사실 그대로의 안내.
+              시트가 원본이므로 URL 이 등록돼 있으면 모든 변경이 항상 반영되어야 한다.
+              (전송을 끌 수 있게 두면 앱에만 남은 기록이 다음 접속 때 사라진다) */}
+          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-surface-container-low">
+            <span className={`material-symbols-outlined text-[20px] shrink-0 ${
+              googleConfig.sheetWebhookUrl ? 'text-primary' : 'text-outline'
+            }`}>
+              {googleConfig.sheetWebhookUrl ? 'cloud_done' : 'cloud_off'}
+            </span>
+            <div className="flex flex-col min-w-0">
+              <span className="font-label-md text-xs font-bold text-on-surface">
+                {googleConfig.sheetWebhookUrl
+                  ? '구글 시트가 원본 저장소입니다'
+                  : '아직 시트에 연결되지 않았습니다'}
+              </span>
+              <span className="font-caption text-[10.5px] text-outline leading-relaxed">
+                {googleConfig.sheetWebhookUrl
+                  ? '추가·수정·삭제가 모두 시트에 즉시 반영되고, 앱을 열면 시트에서 다시 불러옵니다.'
+                  : '아래에 웹 앱 URL을 등록하면 모든 기록이 시트에 저장됩니다. 등록 전에는 이 기기에만 저장됩니다.'}
               </span>
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoSync}
-                onChange={(e) => setAutoSync(e.target.checked)}
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-            </label>
           </div>
 
           {/* Web App URL 입력창 */}
@@ -217,23 +225,23 @@ export const SettingsView: React.FC = () => {
           <div className="pt-2 border-t border-outline-variant/20">
             <div className="flex items-center justify-between mb-1">
               <label className="font-label-sm text-xs font-semibold text-on-surface">
-                외기-심부 목표 온도차 한계
+                심부온도 측정 깊이
               </label>
               <span className="font-label-numeric text-xs font-bold text-primary">
-                ≤ {targetTempDiff}℃
+                {probeDepth}cm 이내
               </span>
             </div>
             <input
               type="range"
               min="5"
-              max="20"
-              step="1"
-              value={targetTempDiff}
-              onChange={(e) => setTargetTempDiff(parseInt(e.target.value))}
+              max="50"
+              step="5"
+              value={probeDepth}
+              onChange={(e) => setProbeDepth(parseInt(e.target.value))}
               className="w-full accent-primary cursor-pointer"
             />
             <p className="font-caption text-[11px] text-outline mt-0.5">
-              부숙 안정화 도달 기준: 외기와의 온도차 10℃ 이내
+              계측 화면에 안내되는 탐침 삽입 깊이입니다. 현장 기준이 바뀌면 여기서 조정하세요.
             </p>
           </div>
         </div>
@@ -311,7 +319,7 @@ export const SettingsView: React.FC = () => {
       <div className="mt-4 bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20">
         <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">데이터 전체 삭제</h3>
         <p className="font-caption text-[11px] text-on-surface-variant mt-1 leading-relaxed">
-          등록된 배치와 계측 기록을 모두 지우고 앱을 빈 상태로 만듭니다. 되돌릴 수 없습니다.
+          등록된 배치와 계측 기록을 앱과 구글 시트 양쪽에서 모두 지웁니다. 되돌릴 수 없습니다.
           <br />
           구글 시트 연동 설정과 판정 임계값은 그대로 유지되며, 이미 시트에 기록된 행은 지워지지 않습니다.
         </p>

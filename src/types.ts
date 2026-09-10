@@ -38,7 +38,8 @@ export interface MeasurementLog {
   moisture: number;       // %
   ambientTemp: number;    // ℃
   ambientHum: number;     // %
-  tempDiff: number;       // coreTemp - ambientTemp
+  /** 직전 계측 대비 심부온도 변화(℃). 첫 계측이면 없음. 부숙 진행은 이 추이로 판단한다. */
+  coreTempDelta?: number;
   verdict: VerdictType;
   /** 현장 특이사항 (교반 실시, 침출수 발생 등). 시트의 비고 열에 기록된다. */
   notes?: string;
@@ -46,9 +47,10 @@ export interface MeasurementLog {
 
 export interface CompostSettings {
   targetMoistureThreshold: number;  // 기본 45% (이하 시 적합)
-  targetTempDiffThreshold: number;  // 기본 10℃ (이하 시 적합)
   highMoistureThreshold: number;    // 기본 65% (초과 시 교반 필요)
   highTempThreshold: number;        // 기본 65℃ (초과 시 교반 필요)
+  /** 심부온도 측정 깊이(cm). 현장 기준이 바뀌면 설정에서 조정한다. */
+  coreProbeDepthCm: number;
 }
 
 export interface GoogleSheetsConfig {

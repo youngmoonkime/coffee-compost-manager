@@ -4,7 +4,7 @@
 
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
- * 커피박 부숙 관리 시스템 - 구글 스프레드시트 실시간 연동 Web App (v2)
+ * 커피박 부숙 관리 시스템 - 구글 스프레드시트 실시간 연동 Web App (v5)
  * =========================================================================
  * [간편 1분 설정 방법]
  * 1. 구글 스프레드시트 새 문서(sheets.new)를 만듭니다.
@@ -19,21 +19,34 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * ※ 코드를 고쳤다면 반드시 [배포] > [배포 관리] > 연필(수정) > 버전 [새 버전]
  *    으로 다시 배포해야 변경 내용이 반영됩니다.
  *
- * [v2 변경점 - 중요]
+ * [중요]
  * 앱은 (배치, 경과 일차)당 계측 기록을 1건만 보관합니다.
  * 이 스크립트도 "레코드 키" 열을 기준으로 행을 갱신(upsert)하므로,
  * 같은 날 여러 번 저장하거나 일괄 동기화를 반복해도 시트에 중복 행이 쌓이지 않고
  * 앱의 [최근 계측 기록]과 시트 내용이 항상 일치합니다.
+ *
+ * [v5 변경점]
+ * 앱에서 배치를 지우거나 전체 삭제하면 시트에서도 해당 행이 지워집니다.
+ * 앱의 모든 추가·수정·삭제가 시트에 그대로 반영됩니다.
+ *
+ * [v4 변경점]
+ * 앱이 실행될 때 시트에서 배치·계측 기록을 통째로 읽어옵니다(백엔드 역할).
+ * 어느 기기에서 접속하든 같은 시트를 보게 됩니다.
+ *
+ * [v3 변경점]
+ * '온도차(℃)' 열이 '직전 대비 심부온도(℃)' 로 바뀌었습니다.
+ * 심부온도는 외기와 비교하는 값이 아니라, 같은 더미를 기간을 두고 다시 재서
+ * 추이를 보는 값이기 때문입니다. 기존 시트의 헤더는 자동으로 갱신됩니다.
  */
 
 // 앱이 이 값을 보고 스크립트가 최신인지 판단한다. 코드를 고치면 반드시 올릴 것.
-var SCRIPT_VERSION = 2;
+var SCRIPT_VERSION = 5;
 
 var MEASURE_SHEET = "커피박_부숙일지";
 var BATCH_SHEET = "배치_관리현황";
 var MEASURE_HEADERS = [
   "기록 일시", "배치 코드", "목장명", "경과 일차", "심부 온도(℃)", "심부 함수율(%)",
-  "외기 온도(℃)", "외기 습도(%)", "온도차(℃)", "부숙 판정", "비고", "레코드 키"
+  "외기 온도(℃)", "외기 습도(%)", "직전 대비 심부온도(℃)", "부숙 판정", "비고", "레코드 키"
 ];
 var VERDICT_COL = 10;
 var KEY_COL = 12;
@@ -47,15 +60,144 @@ function doGet(e) {
         message: "스프레드시트를 찾을 수 없습니다. 스프레드시트 상단 [확장 프로그램 > Apps Script]에서 작성해주세요."
       });
     }
+
+    var action = (e && e.parameter && e.parameter.action) || "ping";
+
+    // 앱이 실행될 때 시트의 내용을 그대로 읽어간다. 시트가 원본이고 앱은 화면이다.
+    if (action === "load") {
+      return jsonResponse({
+        status: "success",
+        spreadsheetTitle: ss.getName(),
+        batches: readBatches(ss),
+        measurements: readMeasurements(ss),
+        loadedAt: fieldNow()
+      });
+    }
+
     return jsonResponse({
       status: "success",
       message: "구글 시트 연동 웹 앱이 정상 동작 중입니다!",
       spreadsheetTitle: ss.getName(),
-      connectedAt: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })
+      connectedAt: fieldNow()
     });
   } catch (err) {
     return jsonResponse({ status: "error", message: err.toString() });
   }
+}
+
+/** 셀 값이 Date 든 문자열이든 'YYYY-MM-DD' 로 통일 */
+function toDateString(v) {
+  if (!v && v !== 0) return "";
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    return Utilities.formatDate(v, "Asia/Seoul", "yyyy-MM-dd");
+  }
+  return String(v).trim().slice(0, 10);
+}
+
+/** 셀 값을 'YYYY-MM-DD HH:mm' 로 통일 */
+function toDateTimeString(v) {
+  if (!v && v !== 0) return "";
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    return Utilities.formatDate(v, "Asia/Seoul", "yyyy-MM-dd HH:mm");
+  }
+  return String(v).trim();
+}
+
+function fieldNow() {
+  return Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd HH:mm");
+}
+
+/**
+ * 배치_관리현황 은 이벤트 로그다. 신규 하역 -> 수거량 수정 -> 완숙 완료 순으로
+ * 다시 재생(replay)해서 각 배치의 현재 상태를 복원한다.
+ */
+function readBatches(ss) {
+  var sheet = ss.getSheetByName(BATCH_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getValues();
+  var byCode = {};
+  var order = [];
+
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var event = String(r[0] || "");
+    var code = String(r[2] || "").trim();
+    if (!code || code === "-") continue;
+
+    if (!byCode[code]) {
+      byCode[code] = {
+        code: code,
+        ranchName: "",
+        startDate: "",
+        initialWeightKg: 0,
+        status: "fermenting",
+        notes: ""
+      };
+      order.push(code);
+    }
+
+    var b = byCode[code];
+    var ranch = String(r[3] || "").trim();
+    if (ranch && ranch !== "-") b.ranchName = ranch;
+
+    var start = toDateString(r[4]);
+    if (start && start !== "-") b.startDate = start;
+
+    if (r[5] !== "" && r[5] !== null && r[5] !== undefined) {
+      var kg = Number(r[5]);
+      if (!isNaN(kg)) b.initialWeightKg = kg;
+    }
+
+    var note = String(r[7] || "").trim();
+    if (note) b.notes = note;
+
+    if (event.indexOf("완숙") !== -1) {
+      b.status = "completed";
+      b.completedDate = toDateString(r[1]);
+    }
+  }
+
+  var out = [];
+  for (var j = 0; j < order.length; j++) out.push(byCode[order[j]]);
+  return out;
+}
+
+/** 커피박_부숙일지는 recordKey 로 upsert 되는 상태 표라 그대로 읽으면 된다 */
+function readMeasurements(ss) {
+  var sheet = ss.getSheetByName(MEASURE_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  var width = Math.max(sheet.getLastColumn(), MEASURE_HEADERS.length);
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues();
+  var out = [];
+
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var code = String(r[1] || "").trim();
+    var day = Number(String(r[3] || "").replace("D+", "").trim());
+    if (!code || code === "-" || !day) continue;
+
+    var dt = toDateTimeString(r[0]);
+    var delta = r[8];
+
+    out.push({
+      recordKey: String(r[11] || "") || (code + "|D" + day),
+      batchCode: code,
+      ranchName: String(r[2] || ""),
+      dayNumber: day,
+      date: dt.slice(0, 10),
+      time: dt.length >= 16 ? dt.slice(11, 16) : "",
+      coreTemp: Number(r[4]) || 0,
+      moisture: Number(r[5]) || 0,
+      ambientTemp: Number(r[6]) || 0,
+      ambientHum: Number(r[7]) || 0,
+      coreTempDelta: (delta === "" || delta === null || delta === undefined) ? null : Number(delta),
+      notes: String(r[10] || "")
+    });
+  }
+
+  return out;
 }
 
 function doPost(e) {
@@ -111,6 +253,32 @@ function doPost(e) {
         status: "success",
         message: "배치 정보가 스프레드시트에 반영되었습니다.",
         sheet: BATCH_SHEET
+      });
+    }
+
+    // 2-1. 배치 삭제 -> 그 배치의 계측 행과 배치 이벤트 행을 모두 제거
+    if (data.eventType === "batch_deleted") {
+      var delCode = String(data.batchCode || "").trim();
+      if (!delCode) {
+        return jsonResponse({ status: "error", message: "삭제할 배치 코드가 없습니다." });
+      }
+      var removedLogs = deleteRowsByColumn(ss, MEASURE_SHEET, 2, delCode);
+      var removedEvents = deleteRowsByColumn(ss, BATCH_SHEET, 3, delCode);
+      return jsonResponse({
+        status: "success",
+        message: delCode + " 삭제 (계측 " + removedLogs + "행 / 배치 이력 " + removedEvents + "행)",
+        removed: removedLogs + removedEvents
+      });
+    }
+
+    // 2-2. 전체 삭제 -> 두 시트의 데이터 행을 모두 비운다 (헤더는 유지)
+    if (data.eventType === "clear_all") {
+      var clearedLogs = clearDataRows(ss, MEASURE_SHEET);
+      var clearedEvents = clearDataRows(ss, BATCH_SHEET);
+      return jsonResponse({
+        status: "success",
+        message: "시트를 비웠습니다 (계측 " + clearedLogs + "행 / 배치 이력 " + clearedEvents + "행)",
+        cleared: clearedLogs + clearedEvents
       });
     }
 
@@ -217,6 +385,36 @@ function upsertRows(sheet, items) {
   return { inserted: inserted, updated: updated };
 }
 
+/** 시트의 데이터 행을 모두 지운다 (헤더 행은 남긴다). 지운 행 수를 반환. */
+function clearDataRows(ss, sheetName) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return 0;
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+  sheet.deleteRows(2, last - 1);
+  return last - 1;
+}
+
+/** 특정 열의 값이 일치하는 행을 모두 삭제. 지운 행 수를 반환. */
+function deleteRowsByColumn(ss, sheetName, col, value) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return 0;
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+
+  var vals = sheet.getRange(2, col, last - 1, 1).getValues();
+  var removed = 0;
+
+  // 아래에서 위로 지워야 남은 행의 번호가 밀리지 않는다
+  for (var i = vals.length - 1; i >= 0; i--) {
+    if (String(vals[i][0] || "").trim() === value) {
+      sheet.deleteRow(i + 2);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 /** 레코드 키 -> 행 번호 맵 */
 function readKeyMap(sheet) {
   var map = {};
@@ -250,7 +448,9 @@ function formatMeasurementRow(data) {
     Number(data.moisture || 0),
     Number(data.ambientTemp || 0),
     Number(data.ambientHum || 0),
-    Number(data.tempDiff || 0),
+    data.coreTempDelta === "" || data.coreTempDelta === null || data.coreTempDelta === undefined
+      ? ""
+      : Number(data.coreTempDelta),
     data.verdictTitle || "-",
     data.notes || "",
     key
@@ -278,12 +478,25 @@ function styleVerdictCell(sheet, row) {
 function getMeasureSheet(ss) {
   var sheet = getOrCreateSheet(ss, MEASURE_SHEET, MEASURE_HEADERS, "#2e4a2b");
 
-  if (sheet.getLastColumn() < MEASURE_HEADERS.length) {
-    sheet.getRange(1, 1, 1, MEASURE_HEADERS.length).setValues([MEASURE_HEADERS]);
-    sheet.getRange(1, 1, 1, MEASURE_HEADERS.length)
-      .setBackground("#2e4a2b").setFontColor("#ffffff").setFontWeight("bold");
+  var lastCol = sheet.getLastColumn();
+  var needsKeyBackfill = lastCol < MEASURE_HEADERS.length;
 
-    // 키가 비어 있는 기존 행은 배치 코드 + 일차로 키를 복구
+  // 열 수가 모자라거나 헤더 문구가 달라졌으면 헤더를 최신본으로 맞춘다.
+  // (v3 에서 '온도차(℃)' -> '직전 대비 심부온도(℃)' 로 이름이 바뀌었다)
+  var current = lastCol > 0 ? sheet.getRange(1, 1, 1, MEASURE_HEADERS.length).getValues()[0] : [];
+  var headerChanged = needsKeyBackfill;
+  for (var c = 0; c < MEASURE_HEADERS.length; c++) {
+    if (String(current[c] || "") !== MEASURE_HEADERS[c]) headerChanged = true;
+  }
+
+  if (headerChanged) {
+    var headerRange = sheet.getRange(1, 1, 1, MEASURE_HEADERS.length);
+    headerRange.setValues([MEASURE_HEADERS]);
+    headerRange.setBackground("#2e4a2b").setFontColor("#ffffff").setFontWeight("bold");
+  }
+
+  // 키가 비어 있는 기존 행은 배치 코드 + 일차로 키를 복구
+  if (needsKeyBackfill) {
     var lastRow = sheet.getLastRow();
     if (lastRow >= 2) {
       var body = sheet.getRange(2, 1, lastRow - 1, 4).getValues();

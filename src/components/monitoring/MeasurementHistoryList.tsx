@@ -40,9 +40,13 @@ export const MeasurementHistoryList: React.FC = () => {
     return () => observer.disconnect();
   }, [isScrollable, reversedLogs.length]);
 
-  const handleDelete = (id: string, day: number) => {
-    deleteMeasurementLog(id);
-    showToast(`D+${day}일차 기록이 삭제되었습니다`, undefined, 'info');
+  const handleDelete = async (id: string, day: number) => {
+    const res = await deleteMeasurementLog(id);
+    showToast(
+      `D+${day}일차 기록 삭제`,
+      res.success ? res.message : `시트 반영 실패 — ${res.message}`,
+      res.success ? 'info' : 'warning'
+    );
   };
 
   return (
@@ -109,8 +113,23 @@ export const MeasurementHistoryList: React.FC = () => {
                         함수율 {log.moisture}%
                       </span>
                       <span className="px-1 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-caption text-[10px] whitespace-nowrap">
-                        심부 {log.coreTemp}℃ (차 {log.tempDiff}℃)
+                        심부 {log.coreTemp}℃
                       </span>
+                      {typeof log.coreTempDelta === 'number' && (
+                        <span
+                          title="직전 계측 대비 심부온도 변화"
+                          className={`px-1 py-0.5 rounded font-caption text-[10px] whitespace-nowrap tabular-nums ${
+                            log.coreTempDelta < 0
+                              ? 'bg-primary-fixed text-on-primary-fixed'
+                              : log.coreTempDelta > 0
+                              ? 'bg-error-container text-on-error-container'
+                              : 'bg-surface-container-high text-on-surface-variant'
+                          }`}
+                        >
+                          {log.coreTempDelta > 0 ? '+' : ''}
+                          {log.coreTempDelta}℃
+                        </span>
+                      )}
                     </div>
                     <span className="font-caption text-[11px] text-outline block mt-0.5 truncate">
                       외기 {log.ambientTemp}℃ · 습도 {log.ambientHum}% · {log.time}

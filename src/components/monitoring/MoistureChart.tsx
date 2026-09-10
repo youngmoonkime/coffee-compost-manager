@@ -1,5 +1,10 @@
-import React from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
+
+const CHART_HEIGHT = 116;
+const PADDING = { top: 18, right: 14, bottom: 14, left: 14 };
+const MIN_MOISTURE = 30;
+const MAX_MOISTURE = 80;
 
 export const MoistureChart: React.FC = () => {
   const { activeBatchMeasurements, settings } = useCompost();
@@ -8,33 +13,52 @@ export const MoistureChart: React.FC = () => {
   const logs = activeBatchMeasurements.slice(-6);
   const targetThreshold = settings.targetMoistureThreshold;
 
-  // SVG 차트 좌표 계산
-  // viewBox: 0 0 320 100
-  // X 범위: 20 ~ 300
-  // Y 범위: 함수율 30% ~ 80% 매핑 (0 -> 80%, 100 -> 30%)
-  const minMoist = 30;
-  const maxMoist = 80;
+  /**
+   * 이전에는 viewBox 320x100 을 preserveAspectRatio="none" 으로 컨테이너에 늘렸다.
+   * 가로·세로 배율이 서로 달라져 숫자와 점이 찌그러져 보였다.
+   * 실제 픽셀 폭을 측정해 viewBox 를 그 폭에 맞추면 배율이 1:1 이라 왜곡이 없다.
+   */
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const measure = () => setWidth(el.clientWidth);
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const innerLeft = PADDING.left;
+  const innerRight = Math.max(innerLeft + 1, width - PADDING.right);
+  const innerTop = PADDING.top;
+  const innerBottom = CHART_HEIGHT - PADDING.bottom;
 
   const getY = (val: number) => {
-    const clamped = Math.min(maxMoist, Math.max(minMoist, val));
-    const ratio = (clamped - minMoist) / (maxMoist - minMoist);
-    // ratio가 1일때(80%) Y는 10, ratio가 0일때(30%) Y는 90
-    return 90 - ratio * 80;
+    const clamped = Math.min(MAX_MOISTURE, Math.max(MIN_MOISTURE, val));
+    const ratio = (clamped - MIN_MOISTURE) / (MAX_MOISTURE - MIN_MOISTURE);
+    return innerBottom - ratio * (innerBottom - innerTop);
   };
 
   const lineThresholdY = getY(targetThreshold);
 
-  // X 좌표 균등 배분
   const points = logs.map((log, index) => {
-    const x = logs.length === 1 ? 160 : 20 + (index * (280 / (logs.length - 1)));
-    const y = getY(log.moisture);
-    return { x, y, log };
+    const x =
+      logs.length === 1
+        ? (innerLeft + innerRight) / 2
+        : innerLeft + (index * (innerRight - innerLeft)) / (logs.length - 1);
+    return { x, y: getY(log.moisture), log };
   });
 
   const polylinePoints = points.map(p => `${p.x},${p.y}`).join(' ');
-  const polygonPoints = points.length > 0
-    ? `${points[0].x},95 ${polylinePoints} ${points[points.length - 1].x},95`
-    : '';
+  const polygonPoints =
+    points.length > 0
+      ? `${points[0].x},${innerBottom} ${polylinePoints} ${points[points.length - 1].x},${innerBottom}`
+      : '';
 
   return (
     <section className="w-full mb-3">
@@ -55,100 +79,115 @@ export const MoistureChart: React.FC = () => {
           기준치 {targetThreshold}% 이하 하강 시 가축분뇨 퇴비화 투입 조건 충족
         </p>
 
-        <div className="w-full h-36 relative bg-surface-container-low rounded-xl p-2 flex flex-col justify-between overflow-hidden">
+        <div
+          ref={containerRef}
+          className="w-full relative bg-surface-container-low rounded-xl px-2 pt-2 pb-1.5"
+        >
           {logs.length === 0 ? (
-            <div className="w-full h-full flex items-center justify-center text-outline text-xs">
+            <div className="w-full flex items-center justify-center text-outline text-xs" style={{ height: CHART_HEIGHT }}>
               계측 기록이 없습니다.
             </div>
           ) : (
-            <svg className="w-full h-24 overflow-visible" preserveAspectRatio="none" viewBox="0 0 320 100">
-              <defs>
-                <linearGradient id="moistureGradient" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stopColor="#2e4a2b" stopOpacity="0.35" />
-                  <stop offset="100%" stopColor="#2e4a2b" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              {/* 한계 기준선 */}
-              <line
-                stroke="#ba1a1a"
-                strokeDasharray="4,4"
-                strokeWidth="1.5"
-                x1="10"
-                x2="310"
-                y1={lineThresholdY}
-                y2={lineThresholdY}
-              />
-              <text
-                fill="#ba1a1a"
-                fontFamily="JetBrains Mono"
-                fontSize="8.5"
-                fontWeight="bold"
-                x="240"
-                y={lineThresholdY - 4}
+            <>
+              <svg
+                width="100%"
+                height={CHART_HEIGHT}
+                viewBox={`0 0 ${Math.max(width, 1)} ${CHART_HEIGHT}`}
+                className="block overflow-visible"
+                role="img"
+                aria-label={`심부 함수율 추이. 최근 ${logs.length}건.`}
               >
-                한계선 {targetThreshold}%
-              </text>
+                <defs>
+                  <linearGradient id="moistureGradient" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor="#2e4a2b" stopOpacity="0.32" />
+                    <stop offset="100%" stopColor="#2e4a2b" stopOpacity="0" />
+                  </linearGradient>
+                </defs>
 
-              {/* 그라디언트 영역 및 연결선 */}
-              {polygonPoints && <polygon fill="url(#moistureGradient)" points={polygonPoints} />}
-              {polylinePoints && (
-                <polyline
-                  fill="none"
-                  points={polylinePoints}
-                  stroke="#2e4a2b"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2.5"
+                {/* 투입 한계 기준선 */}
+                <line
+                  stroke="#ba1a1a"
+                  strokeDasharray="4,4"
+                  strokeWidth="1.5"
+                  x1={innerLeft}
+                  x2={innerRight}
+                  y1={lineThresholdY}
+                  y2={lineThresholdY}
                 />
-              )}
-
-              {/* 각 포인트 및 수치 라벨 */}
-              {points.map((p, idx) => {
-                const isLatest = idx === points.length - 1;
-                const isReady = p.log.moisture <= targetThreshold;
-                const circleColor = isReady ? '#2e4a2b' : isLatest ? '#7a573b' : '#2e4a2b';
-
-                return (
-                  <g key={p.log.id}>
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      fill={circleColor}
-                      r={isLatest ? 5 : 3.5}
-                      stroke="#ffffff"
-                      strokeWidth="1.5"
-                    />
-                    <text
-                      fill={circleColor}
-                      fontFamily="JetBrains Mono"
-                      fontSize={isLatest ? '9.5' : '8.5'}
-                      fontWeight="bold"
-                      x={p.x - 10}
-                      y={p.y > 60 ? p.y - 8 : p.y + 14}
-                    >
-                      {p.log.moisture}%
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-          )}
-
-          {/* 하단 X축 라벨 */}
-          <div className="flex justify-between items-center text-[9.5px] font-label-numeric text-outline px-1 pt-1">
-            {logs.map((log, index) => {
-              const isLatest = index === logs.length - 1;
-              return (
-                <span
-                  key={log.id}
-                  className={isLatest ? 'text-secondary font-bold' : ''}
+                <text
+                  fill="#ba1a1a"
+                  fontSize="10"
+                  fontWeight="700"
+                  textAnchor="end"
+                  x={innerRight}
+                  y={lineThresholdY - 5}
                 >
-                  D+{log.dayNumber}{isLatest ? ' (최근)' : ''}
-                </span>
-              );
-            })}
-          </div>
+                  한계선 {targetThreshold}%
+                </text>
+
+                {/* 그라디언트 영역 및 연결선 */}
+                {polygonPoints && <polygon fill="url(#moistureGradient)" points={polygonPoints} />}
+                {polylinePoints && (
+                  <polyline
+                    fill="none"
+                    points={polylinePoints}
+                    stroke="#2e4a2b"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.5"
+                  />
+                )}
+
+                {/* 각 포인트 및 수치 라벨 */}
+                {points.map((p, idx) => {
+                  const isLatest = idx === points.length - 1;
+                  const isReady = p.log.moisture <= targetThreshold;
+                  const color = isReady ? '#2e4a2b' : isLatest ? '#7a573b' : '#2e4a2b';
+
+                  // 라벨이 잘리지 않도록 양 끝에서는 안쪽으로 정렬한다
+                  const anchor = idx === 0 ? 'start' : isLatest ? 'end' : 'middle';
+                  // 점이 아래쪽에 있으면 라벨을 위로, 위쪽이면 아래로 피한다
+                  const labelY = p.y > innerTop + 24 ? p.y - 9 : p.y + 16;
+
+                  return (
+                    <g key={p.log.id}>
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        fill={color}
+                        r={isLatest ? 5 : 3.5}
+                        stroke="#ffffff"
+                        strokeWidth="1.5"
+                      />
+                      <text
+                        fill={color}
+                        fontSize={isLatest ? 11 : 10}
+                        fontWeight="700"
+                        textAnchor={anchor}
+                        x={p.x}
+                        y={labelY}
+                      >
+                        {p.log.moisture}%
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {/* 하단 X축 라벨 */}
+              <div className="flex justify-between items-center text-[9.5px] font-label-numeric text-outline px-1 pt-1.5">
+                {logs.map((log, index) => {
+                  const isLatest = index === logs.length - 1;
+                  return (
+                    <span key={log.id} className={isLatest ? 'text-secondary font-bold' : ''}>
+                      D+{log.dayNumber}
+                      {isLatest ? ' (최근)' : ''}
+                    </span>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         {/* 범례 */}
@@ -160,7 +199,7 @@ export const MoistureChart: React.FC = () => {
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-0.5 bg-error border-dashed"></span>
+            <span className="w-2.5 h-0.5 bg-error"></span>
             <span className="font-caption text-[11px] text-error font-medium whitespace-nowrap">
               투입 한계선 ({targetThreshold}%)
             </span>

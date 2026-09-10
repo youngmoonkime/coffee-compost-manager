@@ -104,7 +104,7 @@ export const VerdictBanner: React.FC<VerdictBannerProps> = ({ currentVerdict }) 
               <div>
                 <span className="font-bold block mb-0.5">완숙 투입 가능 적합 기준:</span>
                 <span>
-                  ① 심부 함수율 <strong>{settings.targetMoistureThreshold}% 이하</strong> &amp; ② 외기-심부 온도차 <strong>{settings.targetTempDiffThreshold}℃ 이하</strong> 도달 시 축사 깔짚 투입 승인
+                  심부 함수율 <strong>{settings.targetMoistureThreshold}% 이하</strong> 도달 시 축사 깔짚 투입 승인 (심부온도 <strong>{settings.highTempThreshold}℃ 초과</strong> 또는 함수율 <strong>{settings.highMoistureThreshold}% 초과</strong> 시 교반 필요)
                 </span>
                 <span className="block mt-1 text-[10px] opacity-80">
                   * 함수율 {settings.highMoistureThreshold}% 초과 또는 심부온도 {settings.highTempThreshold}℃ 초과 시 과열/과습으로 교반(뒤집기) 필요

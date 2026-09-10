@@ -21,12 +21,7 @@ export const MonitoringView: React.FC = () => {
 
   const displayVerdict = useMemo(() => {
     if (liveValues) {
-      return evaluateFermentation(
-        liveValues.coreTemp,
-        liveValues.ambientTemp,
-        liveValues.moisture,
-        settings
-      );
+      return evaluateFermentation(liveValues.coreTemp, liveValues.moisture, settings);
     }
     return currentVerdict;
   }, [liveValues, settings, currentVerdict]);

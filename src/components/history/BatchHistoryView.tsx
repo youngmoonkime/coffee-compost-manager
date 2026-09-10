@@ -5,7 +5,7 @@ import type { Batch } from '../../types';
 import { getBatchPeriod } from '../../utils/calculations';
 
 export const BatchHistoryView: React.FC = () => {
-  const { batches, measurements, activeBatchId, setActiveBatchId, setActiveTab, completeBatch, setIsGoogleModalOpen, resetBatchData } = useCompost();
+  const { batches, measurements, activeBatchId, setActiveBatchId, setActiveTab, completeBatch, setIsGoogleModalOpen, resetBatchData, reloadFromSheet, isLoadingFromSheet, isSheetBackend, deleteBatch } = useCompost();
   const { showToast } = useToast();
   const [filter, setFilter] = useState<'all' | 'fermenting' | 'completed'>('all');
 
@@ -27,17 +27,53 @@ export const BatchHistoryView: React.FC = () => {
     );
   };
 
-  const handleResetData = () => {
+  const handleReload = async () => {
+    const res = await reloadFromSheet();
+    if (res.success) {
+      showToast('구글 시트에서 불러왔습니다', res.message, 'success');
+    } else {
+      showToast('시트를 읽지 못했습니다', res.message, 'error');
+    }
+  };
+
+  const handleResetData = async () => {
     const confirmed = window.confirm(
       `배치 ${batches.length}건과 계측 기록 ${measurements.length}건을 모두 삭제합니다.\n` +
-      '앱은 완전히 빈 상태가 되며, 되돌릴 수 없습니다.\n\n' +
-      '(구글 시트에 이미 기록된 행과 연동 설정은 그대로 유지됩니다)\n\n계속할까요?'
+      (isSheetBackend
+        ? '구글 시트의 기록도 함께 지워집니다.\n'
+        : '') +
+      '되돌릴 수 없습니다.\n\n' +
+      '(구글 시트 연동 설정과 판정 임계값은 유지됩니다)\n\n계속할까요?'
     );
     if (!confirmed) return;
 
-    resetBatchData();
+    const res = await resetBatchData();
     setFilter('all');
-    showToast('모든 이력을 삭제했습니다', '[새 하역 등록]으로 처음부터 시작할 수 있습니다', 'info');
+    showToast(
+      '모든 이력을 삭제했습니다',
+      res.success ? res.message : `시트 반영 실패 — ${res.message}`,
+      res.success ? 'info' : 'warning'
+    );
+  };
+
+  const handleDeleteBatch = async (e: React.MouseEvent, batch: Batch) => {
+    e.stopPropagation();
+
+    const logCount = measurements.filter(m => m.batchId === batch.id).length;
+    const confirmed = window.confirm(
+      `${batch.code} 배치를 삭제합니다.\n` +
+      `이 배치의 계측 기록 ${logCount}건도 함께 지워집니다.\n` +
+      (isSheetBackend ? '구글 시트에서도 제거됩니다.\n' : '') +
+      '\n되돌릴 수 없습니다. 계속할까요?'
+    );
+    if (!confirmed) return;
+
+    const res = await deleteBatch(batch.id);
+    showToast(
+      `${batch.code} 삭제됨`,
+      res.success ? res.message : `시트 반영 실패 — ${res.message}`,
+      res.success ? 'info' : 'warning'
+    );
   };
 
   const handleComplete = (e: React.MouseEvent, batchId: string, code: string) => {
@@ -69,16 +105,31 @@ export const BatchHistoryView: React.FC = () => {
               반입된 커피박의 부숙 이력 및 축사 깔짚 자원화 완료 기록
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsGoogleModalOpen(true)}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-300/80 text-xs font-bold shrink-0 hover:bg-emerald-100 active:scale-95 transition-all shadow-xs"
-            title="구글 스프레드시트 일괄 동기화"
-          >
-            <span className="material-symbols-outlined text-[16px]">table_chart</span>
-            <span className="hidden sm:inline">구글 시트 일괄 동기화</span>
-            <span className="sm:hidden">시트 동기화</span>
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isSheetBackend && (
+              <button
+                type="button"
+                onClick={handleReload}
+                disabled={isLoadingFromSheet}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-surface-container text-on-surface-variant border border-outline-variant/40 text-xs font-bold hover:bg-surface-container-high active:scale-95 transition-all disabled:opacity-60"
+                title="구글 시트에서 최신 내용 다시 불러오기"
+              >
+                <span className={`material-symbols-outlined text-[16px] ${isLoadingFromSheet ? 'animate-spin' : ''}`}>
+                  {isLoadingFromSheet ? 'progress_activity' : 'refresh'}
+                </span>
+                <span className="hidden sm:inline">{isLoadingFromSheet ? '불러오는 중' : '시트에서 새로고침'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsGoogleModalOpen(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-300/80 text-xs font-bold hover:bg-emerald-100 active:scale-95 transition-all shadow-xs"
+              title="구글 스프레드시트 연동 설정"
+            >
+              <span className="material-symbols-outlined text-[16px]">table_chart</span>
+              <span className="hidden sm:inline">시트 설정</span>
+            </button>
+          </div>
         </div>
 
         {/* 필터 세그먼트 버튼 */}
@@ -236,21 +287,33 @@ export const BatchHistoryView: React.FC = () => {
                   {isCompleted ? '기록 조회' : '계측 데이터 보기'}
                 </span>
 
-                {!isCompleted && (
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
-                    onClick={(e) => handleComplete(e, batch.id, batch.code)}
-                    disabled={batchMeasurements.length === 0}
-                    title={
-                      batchMeasurements.length === 0
-                        ? '계측 기록이 있어야 완숙 완료로 넘길 수 있습니다'
-                        : '완숙 완료로 전환'
-                    }
-                    className="px-2.5 py-1 bg-surface-container-high hover:bg-primary hover:text-on-primary text-on-surface-variant rounded-lg text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface-container-high disabled:hover:text-on-surface-variant shrink-0"
+                    onClick={(e) => handleDeleteBatch(e, batch)}
+                    title="이 배치와 계측 기록을 모두 삭제"
+                    className="px-2 py-1 rounded-lg text-outline hover:text-error hover:bg-error-container/40 transition-colors flex items-center gap-0.5 text-xs font-bold"
                     type="button"
                   >
-                    완숙 완료 전환
+                    <span className="material-symbols-outlined text-[15px]">delete</span>
+                    <span className="hidden sm:inline">삭제</span>
                   </button>
-                )}
+
+                  {!isCompleted && (
+                    <button
+                      onClick={(e) => handleComplete(e, batch.id, batch.code)}
+                      disabled={batchMeasurements.length === 0}
+                      title={
+                        batchMeasurements.length === 0
+                          ? '계측 기록이 있어야 완숙 완료로 넘길 수 있습니다'
+                          : '완숙 완료로 전환'
+                      }
+                      className="px-2.5 py-1 bg-surface-container-high hover:bg-primary hover:text-on-primary text-on-surface-variant rounded-lg text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-surface-container-high disabled:hover:text-on-surface-variant"
+                      type="button"
+                    >
+                      완숙 완료 전환
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );

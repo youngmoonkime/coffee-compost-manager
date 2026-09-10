@@ -89,6 +89,52 @@
   padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px));
 }
 
+/* ── 단계 전환 애니메이션 (iOS 느낌의 부드러운 등장) ──
+   tailwindcss-animate 플러그인이 없어 animate-in 계열 클래스는 동작하지 않는다.
+   필요한 것만 직접 정의한다. */
+
+@keyframes step-in-forward {
+  from { opacity: 0; transform: translate3d(16px, 0, 0) scale(0.985); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes step-in-backward {
+  from { opacity: 0; transform: translate3d(-16px, 0, 0) scale(0.985); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes soft-rise {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* iOS 특유의 살짝 튕기는 감속 곡선 */
+.step-forward {
+  animation: step-in-forward 380ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.step-backward {
+  animation: step-in-backward 380ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.soft-rise {
+  animation: soft-rise 420ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* 카드 안 항목이 차례로 나타나도록 하는 지연 단계 */
+.stagger-1 { animation-delay: 60ms; }
+.stagger-2 { animation-delay: 120ms; }
+.stagger-3 { animation-delay: 180ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .step-forward,
+  .step-backward,
+  .soft-rise {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+}
+
 /* 단어 분리 방지 및 가독성 유틸리티 */
 .keep-all {
   word-break: keep-all;
