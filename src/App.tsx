@@ -6,7 +6,7 @@ import { Navigation } from './components/common/Navigation';
 import { Toast } from './components/common/Toast';
 import { GoogleSyncModal } from './components/common/GoogleSyncModal';
 import { MonitoringView } from './components/monitoring/MonitoringView';
-import { BatchHistoryView } from './components/history/BatchHistoryView';
+import { LocationStatusView } from './components/history/LocationStatusView';
 import { SettingsView } from './components/settings/SettingsView';
 
 const MainContent: React.FC = () => {
@@ -24,7 +24,7 @@ const MainContent: React.FC = () => {
       className="flex flex-col flex-1 min-h-0 relative w-full max-w-xl mx-auto pt-20 overflow-y-auto overflow-x-hidden px-4 sm:px-5 smooth-scroll scroll-area"
     >
       {activeTab === 'monitoring' && <MonitoringView />}
-      {activeTab === 'history' && <BatchHistoryView />}
+      {activeTab === 'history' && <LocationStatusView />}
       {activeTab === 'settings' && <SettingsView />}
     </main>
   );

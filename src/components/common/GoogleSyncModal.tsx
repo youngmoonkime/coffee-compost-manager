@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
 import { GOOGLE_APPS_SCRIPT_CODE, GOOGLE_SHEETS_GUIDE_STEPS } from '../../constants/googleScriptTemplate';
+import { SHEET_WEBHOOK_URL } from '../../constants/defaultData';
 import { testGoogleSheetsConnection, REQUIRED_SCRIPT_VERSION } from '../../services/googleSheetsService';
 import { getCurrentDateTimeString } from '../../utils/calculations';
 
@@ -12,12 +13,10 @@ export const GoogleSyncModal: React.FC = () => {
     googleConfig,
     updateGoogleConfig,
     syncAllToGoogleSheets,
-    measurements,
-    batches,
+    records,
   } = useCompost();
   const { showToast } = useToast();
 
-  const [urlInput, setUrlInput] = useState(googleConfig.sheetWebhookUrl);
   const [isTesting, setIsTesting] = useState(false);
   const [isBulkSyncing, setIsBulkSyncing] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -33,27 +32,25 @@ export const GoogleSyncModal: React.FC = () => {
   };
 
   const handleTestPing = async () => {
-    const trimmed = urlInput.trim();
-    if (!trimmed) {
-      showToast('웹 앱 URL을 입력해주세요', undefined, 'warning');
-      return;
-    }
-
     setIsTesting(true);
-    const res = await testGoogleSheetsConnection(trimmed);
+    const res = await testGoogleSheetsConnection(SHEET_WEBHOOK_URL);
     setIsTesting(false);
 
     if (res.success) {
       updateGoogleConfig({
-        sheetWebhookUrl: trimmed,
-        autoSync: true,
         lastSyncStatus: res.verified ? 'success' : 'unverified',
         scriptVersion: res.verified ? res.scriptVersion : undefined,
         lastSyncTime: getCurrentDateTimeString(),
         lastSyncMessage: res.message,
       });
-      if (res.verified) {
-        showToast('구글 시트 연동 성공!', '웹 앱이 정상 응답했습니다. 이제 실시간으로 자동 기록됩니다.', 'success');
+      if (res.verified && (res.scriptVersion ?? 1) < REQUIRED_SCRIPT_VERSION) {
+        showToast(
+          `연결은 됐지만 스크립트가 v${res.scriptVersion ?? 1}입니다`,
+          `최신 v${REQUIRED_SCRIPT_VERSION} 코드를 붙여넣고 [배포 관리 → 연필 → 버전: 새 버전]으로 배포해주세요.`,
+          'warning'
+        );
+      } else if (res.verified) {
+        showToast('구글 시트 연동 성공!', `웹 앱이 정상 응답했습니다 (스크립트 v${res.scriptVersion}). 이제 기록을 저장하면 시트에 자동 등록됩니다.`, 'success');
       } else {
         showToast('전송함 (응답 미확인)', res.message, 'warning');
       }
@@ -62,33 +59,13 @@ export const GoogleSyncModal: React.FC = () => {
     }
   };
 
-  const handleSaveUrl = () => {
-    const trimmed = urlInput.trim();
-    updateGoogleConfig({
-      sheetWebhookUrl: trimmed,
-      autoSync: trimmed.length > 0,
-    });
-    showToast('구글 시트 설정이 저장되었습니다', trimmed ? '실시간 동기화 활성화됨' : '동기화 비활성화됨', 'info');
-    setIsGoogleModalOpen(false);
-  };
-
   const handleBulkSync = async () => {
-    if (!googleConfig.sheetWebhookUrl && !urlInput.trim()) {
-      showToast('구글 웹 앱 URL을 먼저 등록해주세요', undefined, 'warning');
-      return;
-    }
-
-    // URL 임시 저장
-    if (urlInput.trim() !== googleConfig.sheetWebhookUrl) {
-      updateGoogleConfig({ sheetWebhookUrl: urlInput.trim(), autoSync: true });
-    }
-
     setIsBulkSyncing(true);
     const res = await syncAllToGoogleSheets();
     setIsBulkSyncing(false);
 
     if (res.success && res.verified) {
-      showToast('일괄 동기화 완료!', `${res.count}건의 계측 기록이 구글 시트와 일치하도록 반영되었습니다`, 'success');
+      showToast('일괄 동기화 완료!', `기록 ${res.count}건이 구글 시트와 일치하도록 반영되었습니다`, 'success');
     } else if (res.success) {
       showToast('전송함 (결과 미확인)', res.message, 'warning');
     } else {
@@ -112,7 +89,7 @@ export const GoogleSyncModal: React.FC = () => {
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <h3 className="font-headline-sm text-base font-bold text-on-surface">구글 스프레드시트 실시간 연동</h3>
+                <h3 className="font-headline-sm text-base font-bold text-on-surface">구글 스프레드시트 연동</h3>
                 {isConnected && (
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-800 font-caption text-[10.5px] font-bold">
                     연동됨
@@ -120,7 +97,7 @@ export const GoogleSyncModal: React.FC = () => {
                 )}
               </div>
               <p className="font-caption text-[11px] text-outline">
-                현장 계측 및 배치 데이터를 구글 시트에 실시간 자동 기록
+                장소별 주간 기록을 구글 시트에 자동 등록
               </p>
             </div>
           </div>
@@ -155,7 +132,7 @@ export const GoogleSyncModal: React.FC = () => {
             }`}
             type="button"
           >
-            1분 설정 가이드 &amp; 코드 복사
+            설정 가이드 &amp; 코드 복사
           </button>
         </div>
 
@@ -169,8 +146,9 @@ export const GoogleSyncModal: React.FC = () => {
                   배포된 스크립트가 구버전입니다 (v{googleConfig.scriptVersion} → v{REQUIRED_SCRIPT_VERSION} 필요)
                 </span>
                 <span className="font-caption text-[11px] block mt-0.5 leading-relaxed">
-                  중복 행 방지와 수거량 수정 기록이 동작하지 않습니다. 아래 [1분 설정 가이드]에서 코드를
-                  복사해 붙여넣고 <b>[배포] → [배포 관리] → 연필 → 버전 [새 버전]</b>으로 재배포해주세요.
+                  최신 기능(목장별 탭 분리, 파봉 사진 업로드)이나 보안 수정이 적용되지 않습니다. 아래 [설정 가이드]에서 코드를
+                  복사해 붙여넣고, <b>setupPhotoFolder 실행(권한 허용)</b> 후 <b>[배포] → [배포 관리] → 연필 → 버전
+                  [새 버전]</b>으로 재배포해주세요. (기존 시트 내용은 지워지지 않습니다)
                 </span>
                 <button
                   type="button"
@@ -186,25 +164,17 @@ export const GoogleSyncModal: React.FC = () => {
           {activeSubTab === 'manage' ? (
             <>
               {/* 연동 상태 요약 박스 */}
-              <div className={`p-3.5 rounded-2xl border flex items-center justify-between ${
-                googleConfig.sheetWebhookUrl
-                  ? 'bg-emerald-50/60 border-emerald-200/80 text-emerald-900'
-                  : 'bg-amber-50/70 border-amber-200/80 text-amber-900'
-              }`}>
+              <div className="p-3.5 rounded-2xl border flex items-center justify-between bg-emerald-50/60 border-emerald-200/80 text-emerald-900">
                 <div className="flex items-center gap-3">
-                  <span className={`material-symbols-outlined text-[24px] ${
-                    googleConfig.sheetWebhookUrl ? 'text-emerald-700' : 'text-amber-700'
-                  }`}>
-                    {googleConfig.sheetWebhookUrl ? 'cloud_done' : 'cloud_off'}
-                  </span>
+                  <span className="material-symbols-outlined text-[24px] text-emerald-700">cloud_done</span>
                   <div>
-                    <span className="font-label-sm text-xs font-bold block">
-                      {googleConfig.sheetWebhookUrl ? '실시간 자동 연동 활성화' : '구글 시트 미연동 상태'}
-                    </span>
+                    <span className="font-label-sm text-xs font-bold block">"커피박 부숙 관리 대장" 시트에 자동 연동</span>
                     <span className="font-caption text-[11px] opacity-80 block">
                       {googleConfig.lastSyncTime
-                        ? `최근 동기화: ${googleConfig.lastSyncTime} (${googleConfig.totalSyncedCount || 0}건 기록됨)`
-                        : 'Web App URL을 등록하면 측정 시 자동 기록됩니다.'}
+                        ? `최근 동기화: ${googleConfig.lastSyncTime}${
+                            googleConfig.scriptVersion !== undefined ? ` · 스크립트 v${googleConfig.scriptVersion}` : ''
+                          }`
+                        : '기록을 저장하면 시트에 자동으로 등록됩니다.'}
                     </span>
                   </div>
                 </div>
@@ -218,32 +188,25 @@ export const GoogleSyncModal: React.FC = () => {
                 </button>
               </div>
 
-              {/* Web App URL 입력 및 테스트 */}
+              {/* 고정된 웹 앱 주소 및 연결 테스트 */}
               <div className="space-y-1.5">
-                <label className="font-label-sm text-xs font-bold text-on-surface flex items-center justify-between">
-                  <span>Google Apps Script 웹 앱(Web App) URL</span>
-                  <a
-                    href="https://sheets.new"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] text-secondary hover:underline flex items-center gap-0.5"
-                  >
-                    <span>새 구글 시트 열기</span>
-                    <span className="material-symbols-outlined text-[13px]">open_in_new</span>
-                  </a>
+                <label className="font-label-sm text-xs font-bold text-on-surface flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px] text-outline">lock</span>
+                  연결된 웹 앱 주소 (앱에 고정)
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="url"
-                    placeholder="https://script.google.com/macros/s/.../exec"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    className="flex-1 h-11 bg-surface-container-low rounded-xl px-3 text-xs text-on-surface border border-outline-variant/40 focus:outline-none focus:border-primary placeholder:text-outline/60 font-mono"
+                    value={SHEET_WEBHOOK_URL}
+                    readOnly
+                    aria-readonly="true"
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="flex-1 min-w-0 h-11 bg-surface-container-low rounded-xl px-3 text-xs text-on-surface-variant border border-outline-variant/40 focus:outline-none font-mono"
                   />
                   <button
                     type="button"
                     onClick={handleTestPing}
-                    disabled={isTesting || !urlInput.trim()}
+                    disabled={isTesting}
                     className="px-3 h-11 bg-secondary-container text-on-secondary-container rounded-xl text-xs font-bold shrink-0 hover:opacity-90 active:scale-95 disabled:opacity-40 transition-all flex items-center gap-1"
                   >
                     <span className="material-symbols-outlined text-[16px] animate-spin-none">
@@ -252,30 +215,10 @@ export const GoogleSyncModal: React.FC = () => {
                     <span>{isTesting ? '테스트...' : '연결 테스트'}</span>
                   </button>
                 </div>
-                <p className="font-caption text-[11px] text-outline">
-                  구글 시트 배포 시 복사한 <strong>/exec</strong> 로 끝나는 웹 앱 URL을 붙여넣으세요.
+                <p className="font-caption text-[11px] text-outline break-keep">
+                  스크립트를 고칠 때는 <strong>[배포 관리 → 연필 → 새 버전]</strong>으로 배포해야 이 주소가 그대로 유지됩니다.
+                  [새 배포]를 누르면 주소가 바뀌어 앱과 연결이 끊깁니다.
                 </p>
-              </div>
-
-              {/* 실시간 자동 전송 토글 */}
-              <div className="flex items-center justify-between p-3 rounded-xl bg-surface-container-low border border-outline-variant/20">
-                <div>
-                  <span className="font-label-md text-xs font-bold text-on-surface block">
-                    계측 저장 시 실시간 자동 전송
-                  </span>
-                  <span className="font-caption text-[11px] text-outline">
-                    모니터링 화면에서 [현장 데이터 저장] 클릭 시 시트에 즉시 행 추가
-                  </span>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={googleConfig.autoSync}
-                    onChange={(e) => updateGoogleConfig({ autoSync: e.target.checked })}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-surface-container-highest peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-                </label>
               </div>
 
               {/* 전체 데이터 일괄 동기화 (Bulk Sync) */}
@@ -288,7 +231,7 @@ export const GoogleSyncModal: React.FC = () => {
                         기존 데이터 일괄 동기화 (Bulk Sync)
                       </span>
                       <span className="font-caption text-[11px] text-outline">
-                        현재 앱에 저장된 모든 배치({batches.length}개) 및 계측 로그({measurements.length}개)
+                        현재 앱에 저장된 기록 {records.length}건을 시트와 일치시킵니다
                       </span>
                     </div>
                   </div>
@@ -297,14 +240,14 @@ export const GoogleSyncModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleBulkSync}
-                  disabled={isBulkSyncing || (!googleConfig.sheetWebhookUrl && !urlInput.trim())}
+                  disabled={isBulkSyncing}
                   className="w-full h-10 bg-primary/10 hover:bg-primary/15 text-primary border border-primary/20 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 active:scale-98 transition-all disabled:opacity-40"
                 >
                   <span className={`material-symbols-outlined text-[17px] ${isBulkSyncing ? 'animate-spin' : ''}`}>
                     {isBulkSyncing ? 'sync' : 'upload'}
                   </span>
                   <span>
-                    {isBulkSyncing ? '구글 시트로 일괄 전송 중...' : `전체 계측 이력 (${measurements.length}건) 시트로 보내기`}
+                    {isBulkSyncing ? '구글 시트로 일괄 전송 중...' : `전체 기록 (${records.length}건) 시트로 보내기`}
                   </span>
                 </button>
               </div>
@@ -318,7 +261,7 @@ export const GoogleSyncModal: React.FC = () => {
                     Apps Script 연동 코드
                   </span>
                   <span className="font-caption text-[11px] text-outline">
-                    시트 헤더 생성, 판정별 색상 서식, 실시간/일괄 처리가 모두 포함된 코드
+                    시트 헤더 생성, 판정별 색상 서식, 단건/일괄 처리가 모두 포함된 코드
                   </span>
                 </div>
                 <button
@@ -333,9 +276,11 @@ export const GoogleSyncModal: React.FC = () => {
                 </button>
               </div>
 
-              {/* 5단계 설정 안내 */}
+              {/* 단계별 설정 안내 */}
               <div className="space-y-2.5">
-                <h4 className="font-label-sm text-xs font-bold text-on-surface">5단계 간편 배포 순서</h4>
+                <h4 className="font-label-sm text-xs font-bold text-on-surface">
+                  {GOOGLE_SHEETS_GUIDE_STEPS.length}단계 배포 순서
+                </h4>
                 {GOOGLE_SHEETS_GUIDE_STEPS.map((step) => (
                   <div
                     key={step.step}
@@ -364,16 +309,9 @@ export const GoogleSyncModal: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsGoogleModalOpen(false)}
-            className="px-4 py-2.5 rounded-xl border border-outline-variant/40 text-xs font-bold text-on-surface hover:bg-surface-container transition-colors"
-          >
-            닫기
-          </button>
-          <button
-            type="button"
-            onClick={handleSaveUrl}
             className="px-5 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold shadow-sm hover:opacity-90 active:scale-95 transition-all"
           >
-            설정 저장
+            닫기
           </button>
         </div>
 

@@ -1,48 +1,45 @@
 import React, { useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
-import { DEFAULT_SETTINGS } from '../../constants/defaultData';
-import { testGoogleSheetsConnection } from '../../services/googleSheetsService';
+import { DEFAULT_SETTINGS, SHEET_WEBHOOK_URL } from '../../constants/defaultData';
+import { REQUIRED_SCRIPT_VERSION, testGoogleSheetsConnection } from '../../services/googleSheetsService';
 import { getCurrentDateTimeString } from '../../utils/calculations';
+import { ScriptVersionNotice } from '../common/ScriptVersionNotice';
 
 export const SettingsView: React.FC = () => {
-  const { settings, updateSettings, googleConfig, updateGoogleConfig, setIsGoogleModalOpen, resetBatchData } = useCompost();
+  const { settings, updateSettings, googleConfig, updateGoogleConfig, setIsGoogleModalOpen, resetAllData, records } =
+    useCompost();
   const { showToast } = useToast();
 
   // 판정 기준 상태
-  const [targetMoisture, setTargetMoisture] = useState<number>(settings.targetMoistureThreshold);
+  const [usableMin, setUsableMin] = useState<number>(settings.usableMoistureMin);
+  const [usableMax, setUsableMax] = useState<number>(settings.usableMoistureMax);
   const [probeDepth, setProbeDepth] = useState<number>(settings.coreProbeDepthCm);
   const [highMoisture, setHighMoisture] = useState<number>(settings.highMoistureThreshold);
   const [highTemp, setHighTemp] = useState<number>(settings.highTempThreshold);
 
-  // 구글 시트 연동 상태
-  const [sheetUrl, setSheetUrl] = useState<string>(googleConfig.sheetWebhookUrl);
-  const [autoSync, setAutoSync] = useState<boolean>(googleConfig.autoSync);
+  // 구글 시트 주소는 앱에 고정돼 있어 연결 테스트만 한다
   const [isTesting, setIsTesting] = useState<boolean>(false);
-
-  // googleConfig 변경 시 로컬 입력창 동기화
-  React.useEffect(() => {
-    setSheetUrl(googleConfig.sheetWebhookUrl);
-    setAutoSync(googleConfig.autoSync);
-  }, [googleConfig.sheetWebhookUrl, googleConfig.autoSync]);
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
+    if (usableMin >= usableMax) {
+      showToast('깔개 사용 함수율 범위를 확인해주세요', '하한이 상한보다 작아야 합니다', 'warning');
+      return;
+    }
     updateSettings({
-      targetMoistureThreshold: targetMoisture,
+      usableMoistureMin: usableMin,
+      usableMoistureMax: usableMax,
       coreProbeDepthCm: probeDepth,
       highMoistureThreshold: highMoisture,
       highTempThreshold: highTemp,
-    });
-    updateGoogleConfig({
-      sheetWebhookUrl: sheetUrl.trim(),
-      autoSync,
     });
     showToast('설정이 성공적으로 저장되었습니다', undefined, 'success');
   };
 
   const handleResetDefaults = () => {
-    setTargetMoisture(DEFAULT_SETTINGS.targetMoistureThreshold);
+    setUsableMin(DEFAULT_SETTINGS.usableMoistureMin);
+    setUsableMax(DEFAULT_SETTINGS.usableMoistureMax);
     setProbeDepth(DEFAULT_SETTINGS.coreProbeDepthCm);
     setHighMoisture(DEFAULT_SETTINGS.highMoistureThreshold);
     setHighTemp(DEFAULT_SETTINGS.highTempThreshold);
@@ -50,15 +47,15 @@ export const SettingsView: React.FC = () => {
     showToast('기본 설정값으로 초기화되었습니다', undefined, 'info');
   };
 
-  const handleResetBatchData = async () => {
+  const handleResetAllData = async () => {
     const confirmed = window.confirm(
-      '배치와 계측 기록을 모두 삭제합니다.\n' +
-      '앱과 구글 시트 양쪽에서 지워지며, 되돌릴 수 없습니다.\n\n' +
-      '(연동 설정과 판정 임계값은 유지됩니다)\n\n계속할까요?'
+      `기록 ${records.length}건을 모두 삭제합니다.\n` +
+      '앱과 구글 시트(모든 목장 탭) 양쪽에서 지워지며, 되돌릴 수 없습니다.\n\n' +
+      '(연동 설정과 판정 기준은 유지됩니다)\n\n계속할까요?'
     );
     if (!confirmed) return;
 
-    const res = await resetBatchData();
+    const res = await resetAllData();
     showToast(
       '모든 이력을 삭제했습니다',
       res.success ? res.message : `시트 반영 실패 — ${res.message}`,
@@ -67,24 +64,25 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleTestConnection = async () => {
-    if (!sheetUrl.trim()) {
-      showToast('구글 웹 앱 URL을 먼저 입력해주세요', undefined, 'warning');
-      return;
-    }
     setIsTesting(true);
-    const res = await testGoogleSheetsConnection(sheetUrl.trim());
+    const res = await testGoogleSheetsConnection(SHEET_WEBHOOK_URL);
     setIsTesting(false);
 
     if (res.success) {
       updateGoogleConfig({
-        sheetWebhookUrl: sheetUrl.trim(),
         lastSyncTime: getCurrentDateTimeString(),
         lastSyncStatus: res.verified ? 'success' : 'unverified',
         scriptVersion: res.verified ? res.scriptVersion : undefined,
         lastSyncMessage: res.message,
       });
-      if (res.verified) {
-        showToast('구글 시트 연동 확인!', '웹 앱이 정상 응답했습니다', 'success');
+      if (res.verified && (res.scriptVersion ?? 1) < REQUIRED_SCRIPT_VERSION) {
+        showToast(
+          `연결은 됐지만 스크립트가 v${res.scriptVersion ?? 1}입니다`,
+          `최신 v${REQUIRED_SCRIPT_VERSION} 코드를 붙여넣고 [배포 관리 → 연필 → 버전: 새 버전]으로 배포해주세요.`,
+          'warning'
+        );
+      } else if (res.verified) {
+        showToast('구글 시트 연동 확인!', `웹 앱이 정상 응답했습니다 (스크립트 v${res.scriptVersion})`, 'success');
       } else {
         showToast('전송함 (응답 미확인)', res.message, 'warning');
       }
@@ -98,7 +96,7 @@ export const SettingsView: React.FC = () => {
       <div className="mb-4">
         <h2 className="font-headline-md text-headline-md text-on-surface">설정 및 현장 관리</h2>
         <p className="font-caption text-caption text-on-surface-variant mt-0.5">
-          커피박 부숙도 자동 판정 임계치 및 구글 스프레드시트 연동
+          깔개 사용 기준·경보 기준 및 구글 스프레드시트 연동
         </p>
       </div>
 
@@ -115,7 +113,7 @@ export const SettingsView: React.FC = () => {
                   구글 스프레드시트 자동 연동
                 </h3>
                 <span className="font-caption text-[11px] text-outline">
-                  계측 시 실시간 자동 행(Row) 추가
+                  기록 저장 시 자동 행(Row) 추가
                 </span>
               </div>
             </div>
@@ -131,40 +129,34 @@ export const SettingsView: React.FC = () => {
           </div>
 
           {/* 연동 상태 — 켜고 끄는 스위치가 아니라 사실 그대로의 안내.
-              시트가 원본이므로 URL 이 등록돼 있으면 모든 변경이 항상 반영되어야 한다.
+              시트가 원본이므로 모든 변경이 항상 반영되어야 한다.
               (전송을 끌 수 있게 두면 앱에만 남은 기록이 다음 접속 때 사라진다) */}
           <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-surface-container-low">
-            <span className={`material-symbols-outlined text-[20px] shrink-0 ${
-              googleConfig.sheetWebhookUrl ? 'text-primary' : 'text-outline'
-            }`}>
-              {googleConfig.sheetWebhookUrl ? 'cloud_done' : 'cloud_off'}
-            </span>
+            <span className="material-symbols-outlined text-[20px] shrink-0 text-primary">cloud_done</span>
             <div className="flex flex-col min-w-0">
               <span className="font-label-md text-xs font-bold text-on-surface">
-                {googleConfig.sheetWebhookUrl
-                  ? '구글 시트가 원본 저장소입니다'
-                  : '아직 시트에 연결되지 않았습니다'}
+                "커피박 부숙 관리 대장" 시트가 원본 저장소입니다
               </span>
               <span className="font-caption text-[10.5px] text-outline leading-relaxed">
-                {googleConfig.sheetWebhookUrl
-                  ? '추가·수정·삭제가 모두 시트에 즉시 반영되고, 앱을 열면 시트에서 다시 불러옵니다.'
-                  : '아래에 웹 앱 URL을 등록하면 모든 기록이 시트에 저장됩니다. 등록 전에는 이 기기에만 저장됩니다.'}
+                추가·수정·삭제가 모두 시트에 즉시 반영되고, 앱을 열면 시트에서 다시 불러옵니다.
               </span>
             </div>
           </div>
 
-          {/* Web App URL 입력창 */}
+          {/* 고정된 웹 앱 주소 */}
           <div>
-            <label className="font-label-sm text-xs font-semibold text-on-surface block mb-1">
-              Google Apps Script 웹 앱(Web App) URL
+            <label className="font-label-sm text-xs font-semibold text-on-surface flex items-center gap-1 mb-1">
+              <span className="material-symbols-outlined text-[14px] text-outline">lock</span>
+              연결된 웹 앱 주소 (앱에 고정)
             </label>
             <div className="flex gap-2">
               <input
                 type="url"
-                placeholder="https://script.google.com/macros/s/.../exec"
-                value={sheetUrl}
-                onChange={(e) => setSheetUrl(e.target.value)}
-                className="flex-1 h-11 bg-surface-container-low rounded-xl px-3 text-xs text-on-surface border border-outline-variant/40 focus:outline-none focus:border-primary placeholder:text-outline/70"
+                value={SHEET_WEBHOOK_URL}
+                readOnly
+                aria-readonly="true"
+                onFocus={(e) => e.currentTarget.select()}
+                className="flex-1 min-w-0 h-11 bg-surface-container-low rounded-xl px-3 text-xs text-on-surface-variant border border-outline-variant/40 focus:outline-none"
               />
               <button
                 type="button"
@@ -185,40 +177,59 @@ export const SettingsView: React.FC = () => {
                 }`}></span>
                 최근 동기화: {googleConfig.lastSyncTime}
                 {googleConfig.lastSyncStatus === 'success' ? ' (정상)' : ' (실패)'}
+                {googleConfig.scriptVersion !== undefined && ` · 스크립트 v${googleConfig.scriptVersion}`}
               </p>
             )}
+            <ScriptVersionNotice className="mt-2" />
           </div>
         </div>
 
-        {/* 2. 완숙 판정 임계값 설정 */}
+        {/* 2. 깔개 사용 기준 */}
         <div className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 space-y-3">
           <div className="flex items-center gap-2 mb-1">
             <span className="material-symbols-outlined text-primary text-[20px]">tune</span>
             <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">
-              완숙 투입 적합 기준치 설정
+              깔개 사용 기준
             </h3>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="font-label-sm text-xs font-semibold text-on-surface">
-                완숙 목표 심부 함수율 한계선
+                깔개 사용 가능 심부 함수율
               </label>
               <span className="font-label-numeric text-xs font-bold text-primary">
-                ≤ {targetMoisture}%
+                {usableMin}~{usableMax}%
               </span>
             </div>
-            <input
-              type="range"
-              min="30"
-              max="55"
-              step="1"
-              value={targetMoisture}
-              onChange={(e) => setTargetMoisture(parseInt(e.target.value))}
-              className="w-full accent-primary cursor-pointer"
-            />
-            <p className="font-caption text-[11px] text-outline mt-0.5">
-              축사 깔짚 투입 기준: 일반적으로 45% 이하 권장
+            <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
+              <span className="font-caption text-[11px] text-outline">하한</span>
+              <input
+                type="range"
+                min="15"
+                max="45"
+                step="1"
+                value={usableMin}
+                aria-label="깔개 사용 함수율 하한"
+                onChange={(e) => setUsableMin(parseInt(e.target.value))}
+                className="w-full accent-primary cursor-pointer"
+              />
+              <span className="font-caption text-[11px] text-outline">상한</span>
+              <input
+                type="range"
+                min="25"
+                max="60"
+                step="1"
+                value={usableMax}
+                aria-label="깔개 사용 함수율 상한"
+                onChange={(e) => setUsableMax(parseInt(e.target.value))}
+                className="w-full accent-primary cursor-pointer"
+              />
+            </div>
+            <p className={`font-caption text-[11px] mt-0.5 break-keep ${usableMin >= usableMax ? 'text-error' : 'text-outline'}`}>
+              {usableMin >= usableMax
+                ? '하한이 상한보다 작아야 합니다.'
+                : '같은 장소의 함수율이 이 범위에 들면 깔개 사용 가능으로 안내합니다.'}
             </p>
           </div>
 
@@ -228,7 +239,7 @@ export const SettingsView: React.FC = () => {
                 심부온도 측정 깊이
               </label>
               <span className="font-label-numeric text-xs font-bold text-primary">
-                {probeDepth}cm 이내
+                {probeDepth}cm
               </span>
             </div>
             <input
@@ -251,7 +262,7 @@ export const SettingsView: React.FC = () => {
           <div className="flex items-center gap-2 mb-1">
             <span className="material-symbols-outlined text-error text-[20px]">warning</span>
             <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">
-              개입 필요 (뒤집기/교반) 경보 기준
+              혼합 필요 (뒤집기) 경보 기준
             </h3>
           </div>
 
@@ -315,17 +326,17 @@ export const SettingsView: React.FC = () => {
         </div>
       </form>
 
-      {/* 배치·계측 데이터 초기화 */}
+      {/* 기록 전체 삭제 */}
       <div className="mt-4 bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20">
         <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">데이터 전체 삭제</h3>
-        <p className="font-caption text-[11px] text-on-surface-variant mt-1 leading-relaxed">
-          등록된 배치와 계측 기록을 앱과 구글 시트 양쪽에서 모두 지웁니다. 되돌릴 수 없습니다.
+        <p className="font-caption text-[11px] text-on-surface-variant mt-1 leading-relaxed break-keep">
+          저장된 기록({records.length}건)을 앱과 구글 시트(모든 목장 탭) 양쪽에서 모두 지웁니다. 되돌릴 수 없습니다.
           <br />
-          구글 시트 연동 설정과 판정 임계값은 그대로 유지되며, 이미 시트에 기록된 행은 지워지지 않습니다.
+          구글 시트 연동 설정과 판정 기준은 그대로 유지됩니다.
         </p>
         <button
           type="button"
-          onClick={handleResetBatchData}
+          onClick={handleResetAllData}
           className="mt-3 w-full h-11 rounded-xl border border-error/40 text-error font-label-md text-xs font-bold hover:bg-error-container/40 active:scale-99 transition-all flex items-center justify-center gap-1.5"
         >
           <span className="material-symbols-outlined text-[17px]">delete_sweep</span>

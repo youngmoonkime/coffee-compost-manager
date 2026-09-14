@@ -3,11 +3,11 @@ import { useCompost } from '../../contexts/CompostContext';
 import type { ActiveTab } from '../../types';
 
 export const Navigation: React.FC = () => {
-  const { activeTab, setActiveTab } = useCompost();
+  const { activeTab, setActiveTab, setHistoryPileKey } = useCompost();
 
   const navItems: { id: ActiveTab; label: string; icon: string }[] = [
-    { id: 'monitoring', label: '측정 & 모니터링', icon: 'sensors' },
-    { id: 'history', label: '배치 이력', icon: 'inventory_2' },
+    { id: 'monitoring', label: '측정 기록', icon: 'edit_note' },
+    { id: 'history', label: '장소별 현황', icon: 'location_on' },
     { id: 'settings', label: '설정/관리', icon: 'tune' },
   ];
 
@@ -19,7 +19,11 @@ export const Navigation: React.FC = () => {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => {
+                // 하단 탭으로 들어오면 항상 장소 목록부터 보여준다 (상세는 목록이나 결과 화면에서 연다)
+                if (item.id === 'history') setHistoryPileKey(null);
+                setActiveTab(item.id);
+              }}
               className={`flex flex-col items-center justify-center min-w-[72px] min-h-[44px] gap-1 transition-all ${
                 isActive
                   ? 'text-primary font-bold scale-105'
