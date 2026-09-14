@@ -17,4 +17,4 @@ export const DEFAULT_RANCH_NAME = '건준목장';
  * 스크립트를 고칠 때는 [배포 관리 → 연필 → 새 버전]으로 배포해야 이 주소가 유지된다.
  */
 export const SHEET_WEBHOOK_URL =
-  'https://script.google.com/macros/s/AKfycbyRqCQpht0Nu49Dwb-PmWnM6UtozDzn_ZYN1iH0puu3CWj7DhRY8rbsElWP1RZn1H6b/exec';
+  'https://script.google.com/macros/s/AKfycbzpFuoswIAxSUyQAZHGxJNtx7JWZmSMSxj-oSbJgy0Tbm0rZMuYgPCHOMTi9rFbt700/exec';
