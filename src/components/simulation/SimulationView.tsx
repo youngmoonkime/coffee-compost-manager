@@ -70,6 +70,14 @@ export const SimulationView: React.FC = () => {
       root.replaceChildren(...Array.from(pristineRef.current.childNodes, node => node.cloneNode(true)));
     }
 
+    /*
+     * 화면 전환 애니메이션(.view-enter)이 남긴 transform·will-change 가 있으면
+     * 그 상자가 position: fixed 의 기준이 되어 설정 팝업이 화면 밖으로 밀려난다.
+     * 시뮬레이션 화면에서만 그 효과를 걷어낸다.
+     */
+    const viewHost = root.closest<HTMLElement>('.view-enter');
+    viewHost?.classList.add('barn-view-host');
+
     const q = <T extends HTMLElement = HTMLElement>(id: string) =>
       root.querySelector<T>('#bm-' + id);
     const canvas = q<HTMLCanvasElement>('canvas');
@@ -140,7 +148,7 @@ export const SimulationView: React.FC = () => {
     const inspector = document.createElement('section');
     inspector.className = 'panel inspector';
     inspector.innerHTML =
-      '<div class="mobile-sheet-handle"></div><h3 id="bm-inspector-title">축사 설정</h3><div class="object-tabs" id="bm-tabs"></div><p class="muted">3D 선택 지점을 누르면 설정이 열립니다.</p><div id="bm-inspector-fields"></div>';
+      '<div class="mobile-sheet-handle"></div><button type="button" class="sheet-close" id="bm-sheet-close" aria-label="설정 닫기">✕</button><h3 id="bm-inspector-title">축사 설정</h3><div class="object-tabs" id="bm-tabs"></div><p class="muted">3D 선택 지점을 누르면 설정이 열립니다.</p><div id="bm-inspector-fields"></div>';
     editor.append(inspector);
 
     const groups: Record<string, string[]> = {
@@ -305,6 +313,8 @@ export const SimulationView: React.FC = () => {
       hotButtons.forEach(btn => btn.classList.remove('near'));
     });
 
+    const isMobile = () => window.matchMedia('(max-width:900px)').matches;
+
     function selectPart(part: string, id = selected) {
       if (part === 'b') part = 'a';
       activePart = part;
@@ -340,7 +350,11 @@ export const SimulationView: React.FC = () => {
       btn.setAttribute('aria-pressed', String(selected === id && activePart === part));
       btn.style.left = Math.max(42, Math.min(cvs.clientWidth - 42, x)) + 'px';
       btn.style.top = Math.max(20, Math.min(cvs.clientHeight - 20, y)) + 'px';
-      btn.onclick = () => selectPart(part, id);
+      btn.onclick = () => {
+        selectPart(part, id);
+        // 휴대폰에서는 설정 칸이 화면 아래 숨어 있으므로 눌린 지점의 설정을 팝업으로 띄운다
+        if (isMobile()) setSheet(true);
+      };
       btn.dataset.live = '1';
     }
 
@@ -972,15 +986,29 @@ export const SimulationView: React.FC = () => {
     const setSheet = (open: boolean) => {
       inspector.classList.toggle('sheet-open', open);
       overlaySheet.classList.toggle('show', open);
+      // 팝업이 떠 있는 동안 뒤 화면이 같이 밀리지 않게 한다
+      document.body.classList.toggle('barn-sheet-open', open);
+      if (open) {
+        inspector.scrollTop = 0;
+        // 값을 고치는 동안 3D 화면이 팝업 위쪽에 보이도록 맞춘다
+        if (isMobile()) scene?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
     };
 
     inspector.querySelector('h3')?.addEventListener('click', () => {
-      if (window.matchMedia('(max-width:900px)').matches) {
-        setSheet(!inspector.classList.contains('sheet-open'));
-      }
+      if (isMobile()) setSheet(!inspector.classList.contains('sheet-open'));
     });
 
+    inspector.querySelector('.mobile-sheet-handle')?.addEventListener('click', () => setSheet(false));
+    inspector.querySelector('#bm-sheet-close')?.addEventListener('click', () => setSheet(false));
     overlaySheet.addEventListener('click', () => setSheet(false));
+
+    // 가로로 돌리거나 큰 화면이 되면 팝업 상태를 풀어 준다 (옆 패널로 돌아간다)
+    const wide = window.matchMedia('(min-width:901px)');
+    const handleWide = () => {
+      if (wide.matches) setSheet(false);
+    };
+    wide.addEventListener('change', handleWide);
 
     // 더보기 메뉴 및 상단 액션
     const menuEl = root.querySelector<HTMLDivElement>('#apple-menu');
@@ -1009,7 +1037,7 @@ export const SimulationView: React.FC = () => {
 
     root.querySelector('#apple-open-inspector')?.addEventListener('click', () => {
       closeMenu();
-      if (window.matchMedia('(max-width:900px)').matches) {
+      if (isMobile()) {
         setSheet(true);
       } else {
         inspector.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1077,6 +1105,9 @@ export const SimulationView: React.FC = () => {
       canvas.removeEventListener('lostpointercapture', handlePointerUp);
       document.removeEventListener('click', handleDocClick);
       document.removeEventListener('keydown', handleKeyDown);
+      wide.removeEventListener('change', handleWide);
+      viewHost?.classList.remove('barn-view-host');
+      document.body.classList.remove('barn-sheet-open');
       overlaySheet.remove();
       redrawRef.current = null;
     };

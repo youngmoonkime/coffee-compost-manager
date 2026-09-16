@@ -619,6 +619,18 @@
   display: none;
 }
 
+/* 시뮬레이션 화면을 감싼 상자 — 설정 팝업이 화면에 고정될 수 있도록 변형 효과를 끈다 */
+.barn-view-host {
+  animation: none !important;
+  transform: none !important;
+  will-change: auto !important;
+}
+
+/* 설정 팝업 닫기 버튼 — 넓은 화면에서는 옆 패널로 보이므로 필요 없다 */
+#barn-module .sheet-close {
+  display: none;
+}
+
 .apple-mobile-overlay {
   display: none;
 }
@@ -650,6 +662,10 @@
   #barn-module .editor-layout canvas {
     height: 360px;
   }
+  /*
+   * 휴대폰에서는 설정 칸을 본문에 길게 늘어놓지 않는다.
+   * 3D 화면의 [축사 설정] 같은 지점을 누르면 아래에서 팝업으로 올라온다.
+   */
   #barn-module .inspector {
     position: fixed !important;
     left: 0;
@@ -658,11 +674,15 @@
     top: auto !important;
     z-index: 80;
     margin: 0 !important;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
     border-radius: 26px 26px 0 0 !important;
-    max-height: 74vh;
+    max-height: 62vh;
     overflow: auto;
-    transform: translateY(calc(100% - 66px));
-    transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+    overscroll-behavior: contain;
+    transform: translateY(100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0.28s;
     box-shadow: 0 -14px 44px rgba(0, 0, 0, 0.18) !important;
     background: color-mix(in srgb, var(--surface) 96%, transparent) !important;
     backdrop-filter: blur(24px) saturate(180%);
@@ -670,6 +690,33 @@
   }
   #barn-module .inspector.sheet-open {
     transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+  /* 팝업이 떠 있는 동안 뒤 화면 스크롤을 멈춘다 */
+  body.barn-sheet-open {
+    overflow: hidden;
+  }
+  #barn-module .sheet-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    right: 16px;
+    top: 14px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    cursor: pointer;
+  }
+  #barn-module .sheet-close:active {
+    transform: scale(0.94);
   }
   .mobile-sheet-handle {
     display: block;
@@ -681,11 +728,17 @@
   }
   #barn-module .inspector h3 {
     cursor: pointer;
+    padding-right: 44px;
+  }
+  #barn-module .inspector > .muted {
+    display: none;
   }
   .apple-mobile-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
     z-index: 70;
     display: none;
   }
