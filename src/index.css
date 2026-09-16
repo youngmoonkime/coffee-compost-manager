@@ -140,3 +140,49 @@
   word-break: keep-all;
   overflow-wrap: break-word;
 }
+
+/* ── 3지점 측정 애니메이션 ── */
+
+/* 값을 다 넣은 지점이 톡 하고 채워지는 느낌 */
+@keyframes point-pop {
+  0%   { transform: scale(0.4); opacity: 0.2; }
+  60%  { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* 지금 재는 지점을 알려주는 퍼지는 링 */
+@keyframes point-pulse {
+  0%   { transform: scale(1); opacity: 0.55; }
+  70%  { transform: scale(2.1); opacity: 0; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+
+/* 평균값이 갱신될 때 살짝 밝아지는 강조 */
+@keyframes value-flash {
+  0%   { background-color: color-mix(in srgb, currentColor 14%, transparent); }
+  100% { background-color: transparent; }
+}
+
+.point-pop {
+  transform-origin: center;
+  animation: point-pop 420ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.point-pulse {
+  transform-origin: center;
+  animation: point-pulse 1800ms ease-out infinite;
+}
+
+.value-flash {
+  animation: value-flash 620ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .point-pop,
+  .value-flash {
+    animation-duration: 1ms;
+  }
+  .point-pulse {
+    animation: none;
+  }
+}

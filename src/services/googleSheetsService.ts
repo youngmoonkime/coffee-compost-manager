@@ -1,10 +1,10 @@
-import type { MeasurementRecord, RecordPhoto } from '../types';
+import type { CorePoint, MeasurementRecord, RecordPhoto } from '../types';
 import { buildRecordKey, getCurrentDateTimeString, normalizeName } from '../utils/calculations';
 import type { AnnotatedRecord } from '../utils/calculations';
 import { getDriveViewUrl } from '../utils/photos';
 import { DEFAULT_RANCH_NAME } from '../constants/defaultData';
 
-export const REQUIRED_SCRIPT_VERSION = 9;
+export const REQUIRED_SCRIPT_VERSION = 11;
 
 /** 구글 드라이브 파일 ID 형식 — 이 형식이 아닌 값은 사진으로 받지 않는다 */
 const DRIVE_FILE_ID_RE = /^[A-Za-z0-9_-]{10,200}$/;
@@ -44,6 +44,9 @@ interface RecordPayload {
   moistureDelta: number | '';
   verdictTitle: string;
   notes: string;
+  /** 지점별 심부 온도·함수율을 '29.5 / 30.1 / 28.8' 형태로 (평균의 근거를 시트에서도 보이게) */
+  coreTempPoints: string;
+  moisturePoints: string;
   /** 이미 드라이브에 올라간 사진 — 행을 갱신해도 사진 칸이 비지 않도록 함께 보낸다 */
   photoIds: string[];
 }
@@ -120,6 +123,29 @@ function assertUrl(webhookUrl: string): SyncResult | null {
   return null;
 }
 
+const POINT_SEPARATOR = ' / ';
+
+function pointsToText(points: CorePoint[] | undefined, pick: (p: CorePoint) => number): string {
+  return (points ?? []).map(pick).join(POINT_SEPARATOR);
+}
+
+/** '29.5 / 30.1 / 28.8' → [29.5, 30.1, 28.8] */
+function textToNumbers(text: unknown): number[] {
+  return String(text ?? '')
+    .split(/[/,·]/)
+    .map(part => Number(part.trim()))
+    .filter(n => Number.isFinite(n));
+}
+
+/** 시트의 지점별 온도·함수율 칸을 지점 목록으로 되돌린다 */
+function toCorePoints(tempText: unknown, moistureText: unknown): CorePoint[] | undefined {
+  const temps = textToNumbers(tempText);
+  const moistures = textToNumbers(moistureText);
+  const count = Math.min(temps.length, moistures.length);
+  if (count === 0) return undefined;
+  return Array.from({ length: count }, (_, i) => ({ coreTemp: temps[i], moisture: moistures[i] }));
+}
+
 function toPayload({ record, previous, verdict }: AnnotatedRecord): RecordPayload {
   const delta = (a: number, b: number) => Number((a - b).toFixed(1));
   return {
@@ -136,6 +162,8 @@ function toPayload({ record, previous, verdict }: AnnotatedRecord): RecordPayloa
     moistureDelta: previous ? delta(record.moisture, previous.moisture) : '',
     verdictTitle: verdict.title,
     notes: record.notes || '',
+    coreTempPoints: pointsToText(record.corePoints, p => p.coreTemp),
+    moisturePoints: pointsToText(record.corePoints, p => p.moisture),
     photoIds: (record.photos ?? []).map(p => p.fileId),
   };
 }
@@ -219,6 +247,8 @@ interface RawSheetRecord {
   ambientHum?: number;
   notes?: string;
   photoIds?: string[];
+  coreTempPoints?: string;
+  moisturePoints?: string;
 }
 
 /**
@@ -294,6 +324,7 @@ export async function loadFromGoogleSheets(
           ambientHum: Number(r.ambientHum) || 0,
           notes: r.notes || undefined,
           photos: toPhotos(r.photoIds),
+          corePoints: toCorePoints(r.coreTempPoints, r.moisturePoints),
         };
       });
 

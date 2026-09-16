@@ -75,7 +75,7 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
           )}
         </div>
         <span className="font-caption text-[11px] text-primary font-bold whitespace-nowrap">
-          사용 기준 {bandMin}~{bandMax}%
+          깔개 사용 {bandMin}~{bandMax}%
         </span>
       </div>
 
@@ -94,18 +94,34 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
               role="img"
               aria-label={`함수율 추이. 최근 ${logs.length}건. 깔개 사용 기준 ${bandMin}~${bandMax}%.`}
             >
-              {/* 깔개 사용 가능 구간 */}
+              {/* 함수율이 이 점선 구간 안에 들어오면 깔개로 쓸 수 있다 */}
               <rect
                 x={innerLeft}
                 y={bandTop}
                 width={innerRight - innerLeft}
                 height={bandBottom - bandTop}
                 fill="#2e4a2b"
-                fillOpacity="0.1"
+                fillOpacity="0.05"
                 rx="4"
+                stroke="#2e4a2b"
+                strokeOpacity="0.55"
+                strokeWidth="1.2"
+                strokeDasharray="5 4"
               />
-              <text fill="#2e4a2b" fontSize="10" fontWeight="700" textAnchor="end" x={innerRight - 4} y={bandBottom - 5}>
-                깔개 사용 가능
+              {/* 꺾은선이 구간 안으로 들어와도 글씨가 묻히지 않도록 흰 테두리를 두른다 */}
+              <text
+                fill="#2e4a2b"
+                fontSize="10"
+                fontWeight="700"
+                paintOrder="stroke"
+                stroke="#ffffff"
+                strokeWidth="3"
+                strokeLinejoin="round"
+                textAnchor="start"
+                x={innerLeft + 4}
+                y={bandBottom - 5}
+              >
+                이 구간이면 깔개 사용 가능
               </text>
 
               {polylinePoints && (

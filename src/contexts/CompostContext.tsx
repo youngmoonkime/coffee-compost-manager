@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { ActiveTab, CompostSettings, GoogleSheetsConfig, MeasurementRecord, Pile, VerdictInfo } from '../types';
+import type { ActiveTab, CompostSettings, CorePoint, GoogleSheetsConfig, MeasurementRecord, Pile, VerdictInfo } from '../types';
 import { DEFAULT_RANCH_NAME, DEFAULT_SETTINGS, SHEET_WEBHOOK_URL } from '../constants/defaultData';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../utils/storage';
 import {
   annotateRecords,
+  averageCorePoints,
   buildRecordKey,
   compareRecords,
   evaluateRecord,
@@ -69,8 +70,8 @@ export interface RecordInput {
   date: string;
   time: string;
   collectedKg: number;
-  coreTemp: number;
-  moisture: number;
+  /** 같은 높이에서 30cm 간격으로 잰 심부 측정값. 평균이 기록의 대푯값이 된다. */
+  corePoints: CorePoint[];
   ambientTemp: number;
   ambientHum: number;
   notes?: string;
@@ -99,6 +100,11 @@ interface PushOutcome {
   done: boolean;
 }
 
+/** 열어 둔 채로 두었을 때 시트를 다시 읽는 간격 */
+const AUTO_RELOAD_POLL_MS = 3 * 60 * 1000;
+/** 자동 새로고침 최소 간격 — 화면을 자주 오갈 때 시트를 연달아 부르지 않도록 */
+const AUTO_RELOAD_MIN_GAP_MS = 20 * 1000;
+
 interface CompostContextValue {
   records: MeasurementRecord[];
   /** 지금 보고 있는 더미 (목장 + 하역 장소) */
@@ -120,6 +126,8 @@ interface CompostContextValue {
   /** 구글 시트에서 기록을 다시 읽어온다 */
   reloadFromSheet: () => Promise<SyncResult>;
   isLoadingFromSheet: boolean;
+  /** 시트를 마지막으로 읽어온 시각 (ms). 아직 못 읽었으면 null */
+  lastSheetLoadAt: number | null;
   /** 시트를 원본으로 쓰는 상태인지 (웹 앱 URL이 등록돼 있음) */
   isSheetBackend: boolean;
   /** 시트로 보내지 못해 이 기기에만 있는 기록 수 */
@@ -165,6 +173,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isSyncing, setIsSyncing] = useState(false);
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);
   const [isLoadingFromSheet, setIsLoadingFromSheet] = useState(false);
+  const [lastSheetLoadAt, setLastSheetLoadAt] = useState<number | null>(null);
 
   // localStorage 동기화
   useEffect(() => {
@@ -180,10 +189,15 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const recordsRef = useRef(records);
   const pendingRef = useRef(pendingKeys);
   const settingsRef = useRef(settings);
+  // 저장·불러오기가 도는 중에는 자동 새로고침을 쉬게 한다
+  const busyRef = useRef(false);
+  /** 마지막으로 시트를 부른 시각 — 자동 새로고침이 몰리지 않도록 */
+  const lastLoadStartedRef = useRef(0);
   useEffect(() => {
     recordsRef.current = records;
     pendingRef.current = pendingKeys;
     settingsRef.current = settings;
+    busyRef.current = isSyncing || isLoadingFromSheet;
   });
 
   const setActivePile = useCallback((pile: Pile) => {
@@ -275,12 +289,14 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     setIsLoadingFromSheet(true);
+    lastLoadStartedRef.current = Date.now();
     try {
       const result = await loadFromGoogleSheets(webhookUrl);
 
       if (result.scriptVersion) {
         setGoogleConfig(prev => ({ ...prev, scriptVersion: result.scriptVersion }));
       }
+      if (result.success) setLastSheetLoadAt(Date.now());
       if (!result.success || !result.records) return result;
 
       const sheetIds = new Set(result.records.map(r => r.id));
@@ -331,6 +347,36 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     reloadFromSheet().catch(() => {});
   }, [webhookUrl, reloadFromSheet]);
 
+  /**
+   * 원본은 구글 시트다. 시트에서 직접 고치거나 다른 기기에서 올린 내용도 앱에 나타나야 하므로
+   * 화면으로 돌아왔을 때·통신이 돌아왔을 때·앱을 열어 둔 채로 시간이 지났을 때 다시 읽는다.
+   */
+  const autoReload = useCallback(() => {
+    if (!webhookUrl || busyRef.current) return;
+    if (document.visibilityState !== 'visible') return;
+    if (Date.now() - lastLoadStartedRef.current < AUTO_RELOAD_MIN_GAP_MS) return;
+    reloadFromSheet().catch(() => {});
+  }, [webhookUrl, reloadFromSheet]);
+
+  useEffect(() => {
+    if (!webhookUrl) return;
+
+    const onBack = () => {
+      if (document.visibilityState === 'visible') autoReload();
+    };
+    document.addEventListener('visibilitychange', onBack);
+    window.addEventListener('focus', onBack);
+    window.addEventListener('online', autoReload);
+    const timer = window.setInterval(autoReload, AUTO_RELOAD_POLL_MS);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onBack);
+      window.removeEventListener('focus', onBack);
+      window.removeEventListener('online', autoReload);
+      window.clearInterval(timer);
+    };
+  }, [webhookUrl, autoReload]);
+
   const saveRecord = useCallback(async (input: RecordInput): Promise<SaveRecordResult> => {
     const pile: Pile = {
       ranchName: normalizeName(input.ranchName) || DEFAULT_RANCH_NAME,
@@ -345,14 +391,18 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // 사진은 드라이브에 올리므로 시트가 연결돼 있을 때만 받는다
     const newPhotos = webhookUrl ? input.newPhotos ?? [] : [];
 
+    // 지점별로 잰 값의 평균을 기록의 심부 온도·함수율로 쓴다
+    const average = averageCorePoints(input.corePoints);
+
     const record: MeasurementRecord = {
       id,
       ...pile,
       date: input.date,
       time: input.time,
       collectedKg: Math.max(0, Math.round(input.collectedKg)),
-      coreTemp: input.coreTemp,
-      moisture: input.moisture,
+      coreTemp: average.coreTemp,
+      moisture: average.moisture,
+      corePoints: input.corePoints,
       ambientTemp: input.ambientTemp,
       ambientHum: input.ambientHum,
       notes: input.notes?.trim() || undefined,
@@ -502,6 +552,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       deleteRecord,
       reloadFromSheet,
       isLoadingFromSheet,
+      lastSheetLoadAt,
       isSheetBackend,
       pendingCount: pendingKeys.length,
       updateSettings,
@@ -523,6 +574,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       deleteRecord,
       reloadFromSheet,
       isLoadingFromSheet,
+      lastSheetLoadAt,
       isSheetBackend,
       pendingKeys.length,
       updateSettings,

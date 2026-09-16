@@ -92,6 +92,15 @@ const PileSummaryCard: React.FC<{ summary: PileSummary; onClick?: () => void }> 
  * 목록에서는 장소마다 요약만 보여주고, 장소를 누르면 그 장소의 함수율 추이와 기록을 연다.
  * (추이 그래프를 입력 화면마다 붙여 두면 입력에 방해가 되어 여기로 모았다)
  */
+/** 시트를 마지막으로 읽어온 지 얼마나 지났는지 — 자동 새로고침이 돌고 있음을 알 수 있게 */
+function sinceText(at: number | null): string {
+  if (!at) return '아직 불러오지 못했습니다';
+  const min = Math.floor((Date.now() - at) / 60000);
+  if (min < 1) return '방금 확인';
+  if (min < 60) return `${min}분 전 확인`;
+  return `${Math.floor(min / 60)}시간 전 확인`;
+}
+
 export const LocationStatusView: React.FC = () => {
   const {
     records,
@@ -105,6 +114,7 @@ export const LocationStatusView: React.FC = () => {
     isLoadingFromSheet,
     isSheetBackend,
     pendingCount,
+    lastSheetLoadAt,
   } = useCompost();
   const { showToast } = useToast();
 
@@ -152,7 +162,7 @@ export const LocationStatusView: React.FC = () => {
           className="w-full h-12 rounded-2xl bg-primary text-on-primary font-headline-sm text-[15px] font-semibold shadow-sm flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform"
         >
           <span className="material-symbols-outlined text-[19px]">edit_note</span>
-          이 장소 기록하기
+          기록 수정하기
         </button>
 
         <MoistureChart records={selected.records} />
@@ -170,6 +180,11 @@ export const LocationStatusView: React.FC = () => {
             장소를 누르면 함수율 추이와 기록을 볼 수 있습니다 (깔개 사용 기준 {settings.usableMoistureMin}~
             {settings.usableMoistureMax}%)
           </p>
+          {isSheetBackend && (
+            <p className="font-caption text-[11px] text-outline mt-1 break-keep">
+              {isLoadingFromSheet ? '구글 시트에서 불러오는 중…' : `구글 시트 기준 · ${sinceText(lastSheetLoadAt)}`}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {isSheetBackend && (
@@ -237,7 +252,7 @@ export const LocationStatusView: React.FC = () => {
             <span className="font-label-numeric text-[17px] font-bold text-on-surface">{piles.length}곳</span>
           </div>
           <div className="rounded-xl bg-primary-fixed px-3 py-2 text-on-primary-fixed">
-            <span className="font-caption text-[11px] opacity-80 block">깔개 사용 가능</span>
+            <span className="font-caption text-[11px] opacity-80 block">깔개로 쓸 수 있는 곳</span>
             <span className="font-label-numeric text-[17px] font-bold">{usableCount}곳</span>
           </div>
         </div>

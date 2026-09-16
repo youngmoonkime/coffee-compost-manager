@@ -37,6 +37,12 @@ export interface RecordPhoto {
   url: string;
 }
 
+/** 더미 한 지점의 심부 측정값 */
+export interface CorePoint {
+  coreTemp: number;   // ℃
+  moisture: number;   // %
+}
+
 /** 주간 현장 기록 한 건 = 구글 시트 한 행 */
 export interface MeasurementRecord {
   /** 레코드 키 (목장|장소|날짜). 같은 장소·같은 날짜는 한 건만 남는다. */
@@ -48,8 +54,12 @@ export interface MeasurementRecord {
   time: string;           // HH:mm
   /** 이번에 하역한 커피박 수거량(kg). 추가 하역이 없으면 0 */
   collectedKg: number;
+  /** 3지점 평균 심부 온도 */
   coreTemp: number;       // ℃
+  /** 3지점 평균 심부 함수율 */
   moisture: number;       // %
+  /** 같은 높이에서 30cm 간격으로 잰 지점별 값 (평균의 근거). 예전 기록에는 없다. */
+  corePoints?: CorePoint[];
   ambientTemp: number;    // ℃
   ambientHum: number;     // %
   /** 현장 특이사항 (교반 실시, 침출수 발생 등) */

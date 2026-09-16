@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import type { SaveRecordResult } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
 import { DEFAULT_RANCH_NAME } from '../../constants/defaultData';
 import {
+  averageCorePoints,
   buildRecordKey,
   compareRecords,
   daysBetween,
@@ -13,12 +14,15 @@ import {
   getPileKey,
   getPileRecords,
   getWeeklyCollection,
+  CORE_POINT_COUNT,
+  CORE_POINT_SPACING_CM,
   MIXING_GUIDE,
   normalizeName,
 } from '../../utils/calculations';
 import { compressImage, getDriveThumbnailUrl, MAX_PHOTOS_PER_RECORD } from '../../utils/photos';
 import { MoistureChart } from '../common/MoistureChart';
-import type { MeasurementRecord, VerdictInfo } from '../../types';
+import { useCountUp } from '../../utils/useCountUp';
+import type { CorePoint, MeasurementRecord, VerdictInfo } from '../../types';
 
 /** 현장에서 자주 적는 특이사항. 탭 한 번으로 넣고 뺄 수 있다. */
 const QUICK_NOTES = ['교반 실시', '침출수 발생', '악취 심함', '강우', '차수막 덮음', '깔개로 사용'] as const;
@@ -72,6 +76,77 @@ function formatSigned(value: number): string {
   const rounded = Number(value.toFixed(1));
   return `${rounded > 0 ? '+' : ''}${rounded}`;
 }
+
+type PointState = 'done' | 'active' | 'empty';
+
+/**
+ * 같은 높이에서 30cm 간격으로 재는 3지점 안내 그림.
+ * 값을 넣은 지점은 채워지고(톡 튀는 효과), 지금 잴 지점은 링이 퍼진다.
+ */
+const CorePointDiagram: React.FC<{ states: PointState[] }> = ({ states }) => {
+  const doneCount = states.filter(s => s === 'done').length;
+  return (
+    <svg
+      viewBox="0 0 300 96"
+      className="w-full h-[96px]"
+      role="img"
+      aria-label={`같은 높이 ${CORE_POINT_SPACING_CM}cm 간격 3지점 측정. ${doneCount}지점 입력됨.`}
+    >
+      {/* 더미 단면 */}
+      <path d="M8 86 C 62 36, 112 22, 150 22 C 188 22, 238 36, 292 86 Z" fill="#2e4a2b" fillOpacity="0.12" />
+      <path
+        d="M8 86 C 62 36, 112 22, 150 22 C 188 22, 238 36, 292 86"
+        fill="none"
+        stroke="#2e4a2b"
+        strokeOpacity="0.35"
+        strokeWidth="2"
+      />
+
+      {/* 같은 높이(횡구간) 기준선 */}
+      <line x1="52" y1="60" x2="248" y2="60" stroke="#2e4a2b" strokeOpacity="0.3" strokeWidth="1.5" strokeDasharray="4 4" />
+
+      {/* 지점 간격 */}
+      {[105, 195].map(x => (
+        <text key={x} x={x} y={52} textAnchor="middle" fontSize="10" fontWeight="700" fill="#7a573b">
+          {CORE_POINT_SPACING_CM}cm
+        </text>
+      ))}
+
+      {states.map((state, i) => {
+        const cx = 60 + i * 90;
+        return (
+          // state 가 바뀌면 다시 그려지며 등장 애니메이션이 재생된다
+          <g key={`${i}-${state}`}>
+            {state === 'active' && (
+              <circle cx={cx} cy={60} r={11} fill="#2e4a2b" fillOpacity="0.4" className="point-pulse" />
+            )}
+            <circle
+              cx={cx}
+              cy={60}
+              r={11}
+              fill={state === 'done' ? '#2e4a2b' : '#ffffff'}
+              fillOpacity={state === 'done' ? 1 : 0.85}
+              stroke="#2e4a2b"
+              strokeWidth={2}
+              strokeDasharray={state === 'empty' ? '3 3' : undefined}
+              className={state === 'done' ? 'point-pop' : ''}
+            />
+            <text
+              x={cx}
+              y={64}
+              textAnchor="middle"
+              fontSize="11"
+              fontWeight="700"
+              fill={state === 'done' ? '#ffffff' : '#2e4a2b'}
+            >
+              {i + 1}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+};
 
 /** 두 값을 나란히 받는 숫자 입력 (심부·외기) */
 const PairField: React.FC<{
@@ -215,8 +290,10 @@ const MeasurementInputGridComponent: React.FC = () => {
   const [date, setDate] = useState(getCurrentDateString);
   const [time, setTime] = useState(getCurrentTimeString);
   const [collectedRaw, setCollectedRaw] = useState('');
-  const [coreTempRaw, setCoreTempRaw] = useState('');
-  const [moistureRaw, setMoistureRaw] = useState('');
+  /** 지점별 심부 입력값 (같은 높이에서 30cm 간격) */
+  const [corePointsRaw, setCorePointsRaw] = useState(() =>
+    Array.from({ length: CORE_POINT_COUNT }, () => ({ temp: '', moisture: '' }))
+  );
   const [ambientTempRaw, setAmbientTempRaw] = useState('');
   const [ambientHumRaw, setAmbientHumRaw] = useState('');
   const [notes, setNotes] = useState('');
@@ -230,8 +307,23 @@ const MeasurementInputGridComponent: React.FC = () => {
   const [showCriteria, setShowCriteria] = useState(false);
 
   const collectedKg = parseValue(collectedRaw);
-  const coreTemp = parseValue(coreTempRaw);
-  const moisture = parseValue(moistureRaw);
+
+  /** 지점별로 다 채워졌으면 값, 아니면 null */
+  const parsedPoints: (CorePoint | null)[] = corePointsRaw.map(p => {
+    const coreTemp = parseValue(p.temp);
+    const moisture = parseValue(p.moisture);
+    return coreTemp !== null && moisture !== null ? { coreTemp, moisture } : null;
+  });
+  const filledPoints = parsedPoints.filter((p): p is CorePoint => p !== null);
+  const allPointsFilled = filledPoints.length === CORE_POINT_COUNT;
+  // 다 채우기 전에도 지금까지 넣은 지점으로 평균을 보여준다
+  const average = filledPoints.length > 0 ? averageCorePoints(filledPoints) : null;
+  const coreTemp = allPointsFilled ? average!.coreTemp : null;
+  const moisture = allPointsFilled ? average!.moisture : null;
+  const animatedTemp = useCountUp(average ? average.coreTemp : null);
+  const animatedMoisture = useCountUp(average ? average.moisture : null);
+  /** 입력 칸 사이를 엔터로 넘어가기 위한 참조 (지점당 온도·함수율 2칸) */
+  const pointInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const ambientTemp = parseValue(ambientTempRaw);
   const ambientHum = parseValue(ambientHumRaw);
 
@@ -297,6 +389,15 @@ const MeasurementInputGridComponent: React.FC = () => {
     return getWeeklyCollection(records.filter(r => r.id !== key), DATE_RE.test(date) ? date : today);
   }, [records, pile, date, today]);
 
+  const setPointValue = (index: number, key: 'temp' | 'moisture', value: string) =>
+    setCorePointsRaw(prev => prev.map((p, i) => (i === index ? { ...p, [key]: value } : p)));
+
+  /** 아직 값이 안 들어간 첫 지점 = 지금 재는 지점 */
+  const activePointIndex = parsedPoints.findIndex(p => p === null);
+  const pointStates: PointState[] = parsedPoints.map((p, i) =>
+    p ? 'done' : i === activePointIndex ? 'active' : 'empty'
+  );
+
   /** 단계별로 넘어가지 못하는 이유. null 이면 통과 */
   const issueOf = (id: StepId): string | null => {
     switch (id) {
@@ -311,8 +412,8 @@ const MeasurementInputGridComponent: React.FC = () => {
         if (collectedKg < 0) return '0 이상으로 입력해주세요';
         return null;
       case 'core':
-        if (coreTemp === null || moisture === null) return '두 값을 모두 입력해주세요';
-        if (moisture < 0 || moisture > 100) return '함수율은 0~100% 사이입니다';
+        if (!allPointsFilled) return `${CORE_POINT_COUNT}지점 값을 모두 입력해주세요`;
+        if (filledPoints.some(p => p.moisture < 0 || p.moisture > 100)) return '함수율은 0~100% 사이입니다';
         return null;
       case 'ambient':
         if (ambientTemp === null || ambientHum === null) return '두 값을 모두 입력해주세요';
@@ -348,8 +449,7 @@ const MeasurementInputGridComponent: React.FC = () => {
     setDate(getCurrentDateString());
     setTime(getCurrentTimeString());
     setCollectedRaw('');
-    setCoreTempRaw('');
-    setMoistureRaw('');
+    setCorePointsRaw(Array.from({ length: CORE_POINT_COUNT }, () => ({ temp: '', moisture: '' })));
     setAmbientTempRaw('');
     setAmbientHumRaw('');
     setNotes('');
@@ -362,7 +462,7 @@ const MeasurementInputGridComponent: React.FC = () => {
 
   const handleSave = async () => {
     const firstIssue = STEPS.map(s => issueOf(s.id)).find(Boolean);
-    if (firstIssue || collectedKg === null || coreTemp === null || moisture === null || ambientTemp === null || ambientHum === null) {
+    if (firstIssue || collectedKg === null || !allPointsFilled || ambientTemp === null || ambientHum === null) {
       showToast('입력이 완료되지 않았습니다', firstIssue ?? '비어 있는 항목을 채워주세요', 'warning');
       return;
     }
@@ -372,8 +472,7 @@ const MeasurementInputGridComponent: React.FC = () => {
       date,
       time,
       collectedKg,
-      coreTemp,
-      moisture,
+      corePoints: filledPoints,
       ambientTemp,
       ambientHum,
       notes,
@@ -563,51 +662,135 @@ const MeasurementInputGridComponent: React.FC = () => {
       case 'core':
         return (
           <>
-            <p className="font-body-sm text-[13.5px] text-on-surface-variant mb-3 break-keep leading-relaxed">
-              더미 표면에서 <strong className="text-on-surface">{settings.coreProbeDepthCm}cm</strong> 깊이까지 탐침을
-              꽂고 안정된 값을 읽어주세요.
+            <p className="font-body-sm text-[13.5px] text-on-surface-variant mb-2 break-keep leading-relaxed">
+              같은 높이에서 <strong className="text-on-surface">{CORE_POINT_SPACING_CM}cm</strong> 간격으로{' '}
+              <strong className="text-on-surface">{CORE_POINT_COUNT}군데</strong>를 재면 평균값이 기록됩니다. 표면에서{' '}
+              <strong className="text-on-surface">{settings.coreProbeDepthCm}cm</strong> 깊이까지 탐침을 꽂아주세요.
             </p>
 
-            <div className="grid grid-cols-2 gap-3">
-              <PairField label="심부 온도" unit="℃" step={0.5} value={coreTempRaw} autoFocus onChange={setCoreTempRaw} />
-              <PairField label="심부 함수율" unit="%" step={1} value={moistureRaw} onChange={setMoistureRaw} onEnter={goNext} />
+            <CorePointDiagram states={pointStates} />
+
+            <div className="grid grid-cols-[1.6rem_1fr_1fr_1.1rem] items-center gap-x-2 px-2 mt-1">
+              <span />
+              <span className="text-center font-caption text-[11.5px] text-on-surface-variant">심부 온도(℃)</span>
+              <span className="text-center font-caption text-[11.5px] text-on-surface-variant">함수율(%)</span>
+              <span />
             </div>
 
-            {previous ? (
-              <div className="mt-3 rounded-2xl bg-surface-container-low px-4 py-3 soft-rise">
-                <span className="block font-caption text-[12px] text-on-surface-variant">
-                  지난 기록 {formatShortDate(previous.date)} · {daysBetween(previous.date, date)}일 전
+            <div className="mt-1 space-y-1.5">
+              {corePointsRaw.map((point, i) => {
+                const filled = parsedPoints[i] !== null;
+                const isActive = i === activePointIndex;
+                return (
+                  <div
+                    key={i}
+                    className={`grid grid-cols-[1.6rem_1fr_1fr_1.1rem] items-center gap-x-2 rounded-2xl px-2 py-1.5 transition-colors duration-300 ${
+                      filled ? 'bg-primary/10' : isActive ? 'bg-surface-container' : 'bg-surface-container-low'
+                    }`}
+                  >
+                    <span
+                      className={`w-6 h-6 rounded-full flex items-center justify-center font-caption text-[12px] font-bold transition-colors duration-300 ${
+                        filled ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'
+                      }`}
+                    >
+                      {i + 1}
+                    </span>
+
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step={0.5}
+                      value={point.temp}
+                      placeholder="--"
+                      autoFocus={i === 0}
+                      aria-label={`${i + 1}지점 심부 온도(℃)`}
+                      ref={el => {
+                        pointInputRefs.current[i * 2] = el;
+                      }}
+                      onChange={e => setPointValue(i, 'temp', e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        pointInputRefs.current[i * 2 + 1]?.focus();
+                      }}
+                      className="w-full bg-transparent text-center font-display-metric text-[26px] leading-none font-semibold text-on-surface tabular-nums focus:outline-none caret-primary placeholder:text-outline/30"
+                    />
+
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step={1}
+                      value={point.moisture}
+                      placeholder="--"
+                      aria-label={`${i + 1}지점 심부 함수율(%)`}
+                      ref={el => {
+                        pointInputRefs.current[i * 2 + 1] = el;
+                      }}
+                      onChange={e => setPointValue(i, 'moisture', e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        const next = pointInputRefs.current[(i + 1) * 2];
+                        if (next) next.focus();
+                        else goNext();
+                      }}
+                      className="w-full bg-transparent text-center font-display-metric text-[26px] leading-none font-semibold text-on-surface tabular-nums focus:outline-none caret-primary placeholder:text-outline/30"
+                    />
+
+                    <span
+                      className={`material-symbols-outlined text-[18px] text-primary transition-opacity duration-300 ${
+                        filled ? 'opacity-100' : 'opacity-0'
+                      }`}
+                    >
+                      check_circle
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 지점을 채울 때마다 평균이 새로 굴러간다 */}
+            <div
+              className={`mt-3 rounded-2xl px-4 py-3 transition-colors duration-300 ${
+                allPointsFilled ? 'bg-primary-fixed text-on-primary-fixed' : 'bg-surface-container-low text-on-surface'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-caption text-[12px] opacity-80">{CORE_POINT_COUNT}지점 평균</span>
+                <span className="font-caption text-[11.5px] opacity-80 tabular-nums">
+                  {filledPoints.length}/{CORE_POINT_COUNT} 지점 입력
                 </span>
-                <div className="grid grid-cols-2 gap-3 mt-1.5">
-                  {[
-                    { label: '심부 온도', prev: previous.coreTemp, now: coreTemp, unit: '℃' },
-                    { label: '함수율', prev: previous.moisture, now: moisture, unit: '%p' },
-                  ].map(item => (
-                    <div key={item.label} className="font-label-numeric tabular-nums">
-                      <span className="font-caption text-[11.5px] text-outline">{item.label}</span>
-                      <span className="block text-[15px] font-semibold text-on-surface">
-                        {item.prev}
-                        {item.unit === '℃' ? '℃' : '%'}
-                        {item.now !== null && (
-                          <span
-                            className={`ml-1.5 text-[13px] font-bold ${
-                              item.now < item.prev ? 'text-primary' : item.now > item.prev ? 'text-error' : 'text-outline'
-                            }`}
-                          >
-                            {formatSigned(item.now - item.prev)}
-                            {item.unit}
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  ))}
-                </div>
               </div>
-            ) : (
-              <p className="mt-3 text-center font-caption text-[12px] text-outline break-keep">
-                이 장소의 첫 기록입니다. 다음 기록부터 이 값과 비교합니다.
-              </p>
-            )}
+
+              <div key={filledPoints.length} className="value-flash rounded-lg mt-1 flex items-baseline gap-4">
+                <span className="font-caption text-[12px] opacity-80">
+                  심부{' '}
+                  <strong className="font-display-metric text-[24px] tabular-nums">
+                    {animatedTemp !== null ? animatedTemp.toFixed(1) : '--'}
+                  </strong>
+                  ℃
+                </span>
+                <span className="font-caption text-[12px] opacity-80">
+                  함수율{' '}
+                  <strong className="font-display-metric text-[24px] tabular-nums">
+                    {animatedMoisture !== null ? animatedMoisture.toFixed(1) : '--'}
+                  </strong>
+                  %
+                </span>
+              </div>
+
+              {previous ? (
+                <p className="mt-1.5 font-caption text-[11.5px] opacity-90 break-keep">
+                  지난 기록 {formatShortDate(previous.date)} · {daysBetween(previous.date, date)}일 전 — 함수율{' '}
+                  {previous.moisture}%
+                  {average ? ` → ${average.moisture}% (${formatSigned(average.moisture - previous.moisture)}%p)` : ''}
+                </p>
+              ) : (
+                <p className="mt-1.5 font-caption text-[11.5px] opacity-90 break-keep">
+                  이 장소의 첫 기록입니다. 다음 기록부터 이 평균값과 비교합니다.
+                </p>
+              )}
+            </div>
 
             <div className="flex justify-center mt-2.5">
               <span className="px-3 py-1 rounded-full bg-primary-fixed-dim text-on-primary-fixed font-caption text-[12px] font-semibold">
@@ -719,14 +902,19 @@ const MeasurementInputGridComponent: React.FC = () => {
               <SummaryRow label="수거량" value={`${(collectedKg ?? 0).toLocaleString('ko-KR')} kg`} />
               <SummaryRow
                 label={`심부 온도 (${settings.coreProbeDepthCm}cm)`}
-                value={`${coreTempRaw} ℃`}
+                value={`${coreTemp ?? '--'} ℃`}
                 sub={previous && coreTemp !== null ? `${formatSigned(coreTemp - previous.coreTemp)}℃` : undefined}
               />
               <SummaryRow
                 label="심부 함수율"
-                value={`${moistureRaw} %`}
+                value={`${moisture ?? '--'} %`}
                 sub={previous && moisture !== null ? `${formatSigned(moisture - previous.moisture)}%p` : undefined}
                 emphasis
+              />
+              <SummaryRow
+                label={`지점별 값 (${CORE_POINT_SPACING_CM}cm 간격)`}
+                value={`${filledPoints.map(p => p.coreTemp).join(' / ')} ℃`}
+                sub={`${filledPoints.map(p => p.moisture).join(' / ')} %`}
               />
               <SummaryRow label="외기 온도·습도" value={`${ambientTempRaw} ℃ · ${ambientHumRaw} %`} />
               <SummaryRow

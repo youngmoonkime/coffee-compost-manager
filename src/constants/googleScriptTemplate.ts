@@ -4,7 +4,7 @@
 
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
- * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v9)
+ * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v11)
  * =========================================================================
  * [간편 설정 방법]
  * 1. 구글 스프레드시트 새 문서(sheets.new)를 만듭니다. (기존 시트를 계속 써도 됩니다)
@@ -24,7 +24,17 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * 탭 안은 하역 장소 → 측정 일시 순으로 정렬되어, 한 더미의 함수율 변화가 위아래로 이어집니다.
  * 목장 + 하역 장소 + 측정일이 같으면 새 행을 만들지 않고 기존 행을 갱신합니다.
  *
- * [v9 변경점] 보안 강화
+ * [v11 변경점] 예전 탭 자동 맞춤 시점 수정
+ * 3지점 칸 두 개를 끼워 넣는 일이 저장할 때만 일어나서, 재배포 직후 첫 [불러오기] 에서
+ * 예전 행의 사진·레코드 키가 한 칸씩 밀려 읽히는 문제가 있었습니다.
+ * 이제 탭을 읽을 때도 모양을 먼저 맞춥니다.
+ *
+ * [v10] 심부 3지점 측정
+ * 심부 온도·함수율은 같은 높이에서 30cm 간격으로 3군데를 재고 평균을 기록합니다.
+ * "심부 온도 3지점", "심부 함수율 3지점" 칸에 잰 값이 그대로 남아 평균의 근거를 볼 수 있습니다.
+ * 기존 탭에는 두 칸이 자동으로 끼워 넣어집니다 (기록은 그대로 유지).
+ *
+ * [v9] 보안 강화
  * 이 웹 앱은 주소만 알면 누구나 호출할 수 있으므로 들어오는 값을 검사합니다.
  * - =, +, -, @ 로 시작하는 글자는 수식이 아닌 글자로 저장 (시트 수식 주입 방지)
  * - 사진 파일 ID 형식 검사, 사진은 JPEG·5MB·3장 이하만 저장
@@ -40,7 +50,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  */
 
 // 앱이 이 값을 보고 스크립트가 최신인지 판단한다. 코드를 고치면 반드시 올릴 것.
-var SCRIPT_VERSION = 9;
+var SCRIPT_VERSION = 11;
 
 var SHEET_PREFIX = "주간기록_";
 var LEGACY_SHEET = "커피박_주간기록";
@@ -49,14 +59,21 @@ var PHOTO_FOLDER_NAME = "커피박_현장사진";
 var HEADERS = [
   "측정 일시", "목장", "하역 장소", "수거량(kg)", "심부 온도(℃)", "심부 함수율(%)",
   "외기 온도(℃)", "외기 습도(%)", "직전 대비 심부온도(℃)", "직전 대비 함수율(%p)",
-  "판정", "비고", "사진 1", "사진 2", "사진 3", "사진 링크", "레코드 키"
+  "판정", "비고", "심부 온도 3지점(℃)", "심부 함수율 3지점(%)",
+  "사진 1", "사진 2", "사진 3", "사진 링크", "레코드 키"
 ];
 var LOCATION_COL = 3;
 var VERDICT_COL = 11;
-var PHOTO_COL = 13;
+var POINTS_COL = 13;   // 심부 온도 3지점 / 그 다음 칸이 함수율 3지점
+var PHOTO_COL = 15;
 var PHOTO_SLOTS = 3;
-var LINK_COL = 16;
-var KEY_COL = 17;
+var LINK_COL = 18;
+var KEY_COL = 19;
+// v9 까지의 탭 모양 (17열, 마지막이 레코드 키) — 3지점 칸을 끼워 넣을 때만 쓴다
+var V9_COLUMN_COUNT = 17;
+var V9_LINK_INDEX = 15;
+var V9_KEY_INDEX = 16;
+var V6_KEY_INDEX = 12;
 var PHOTO_ROW_HEIGHT = 90;
 var DEFAULT_ROW_HEIGHT = 21;
 
@@ -263,9 +280,21 @@ function listRecordSheets(ss) {
   var out = [];
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
-    if (sheets[i].getName().indexOf(SHEET_PREFIX) === 0) out.push(sheets[i]);
+    if (sheets[i].getName().indexOf(SHEET_PREFIX) !== 0) continue;
+    // 읽기 전에 모양부터 맞춘다 — 안 그러면 예전 탭의 사진·레코드 키를 한 칸씩 밀려 읽는다
+    upgradeSheetShape(sheets[i]);
+    out.push(sheets[i]);
   }
   return out;
+}
+
+/** v9 까지의 탭(17열)이면 "비고" 뒤에 3지점 칸 두 개를 끼워 넣는다 (기존 값은 오른쪽으로 밀린다) */
+function upgradeSheetShape(sheet) {
+  if (sheet.getLastColumn() === V9_COLUMN_COUNT &&
+      String(sheet.getRange(1, V9_COLUMN_COUNT).getValue()) === "레코드 키") {
+    sheet.insertColumnsBefore(POINTS_COL, 2);
+    ensureHeaders(sheet);
+  }
 }
 
 /** 목장 탭 확보 — 없으면 만들고, 헤더가 다르면 최신본으로 맞춘다 */
@@ -273,11 +302,17 @@ function getRecordSheet(ss, ranchName) {
   var name = ranchSheetName(ranchName);
   var sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
+
+  upgradeSheetShape(sheet);
   ensureHeaders(sheet);
   return sheet;
 }
 
 function ensureHeaders(sheet) {
+  // 격자 칸이 모자라면 먼저 늘린다 (칸을 지워 좁아진 탭에서 범위 오류가 나지 않도록)
+  var short = HEADERS.length - sheet.getMaxColumns();
+  if (short > 0) sheet.insertColumnsAfter(sheet.getMaxColumns(), short);
+
   var current = sheet.getLastColumn() > 0 ? sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0] : [];
   var changed = false;
   for (var c = 0; c < HEADERS.length; c++) {
@@ -331,8 +366,8 @@ function migrateLegacySheet(ss) {
         moistureDelta: r[9],
         verdictTitle: r[10],
         notes: r[11],
-        photoIds: isV6 ? [] : parsePhotoIds(r[LINK_COL - 1]),
-        recordKey: String((isV6 ? r[12] : r[KEY_COL - 1]) || "") || (ranch + "|" + location + "|" + dt.slice(0, 10))
+        photoIds: isV6 ? [] : parsePhotoIds(r[V9_LINK_INDEX]),
+        recordKey: String((isV6 ? r[V6_KEY_INDEX] : r[V9_KEY_INDEX]) || "") || (ranch + "|" + location + "|" + dt.slice(0, 10))
       };
       var name = ranchSheetName(ranch);
       (groups[name] = groups[name] || { ranch: ranch, items: [] }).items.push(item);
@@ -510,6 +545,8 @@ function readRecords(sheet) {
       ambientTemp: Number(r[6]) || 0,
       ambientHum: Number(r[7]) || 0,
       notes: String(r[11] || ""),
+      coreTempPoints: String(r[POINTS_COL - 1] || ""),
+      moisturePoints: String(r[POINTS_COL] || ""),
       photoIds: parsePhotoIds(r[LINK_COL - 1]),
       recordKey: String(r[KEY_COL - 1] || "")
     });
@@ -602,6 +639,8 @@ function formatRow(data) {
       delta(data.moistureDelta),
       safeText(data.verdictTitle || "-"),
       safeText(data.notes || ""),
+      safeText(data.coreTempPoints || ""),
+      safeText(data.moisturePoints || ""),
       "", "", "",
       links.join("\\n"),
       safeText(data.recordKey)

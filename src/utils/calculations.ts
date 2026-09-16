@@ -1,4 +1,4 @@
-import type { CompostSettings, MeasurementRecord, Pile, VerdictInfo } from '../types';
+import type { CompostSettings, CorePoint, MeasurementRecord, Pile, VerdictInfo } from '../types';
 
 /* ───────────────────────── 날짜·시간 (한국 시간 기준) ───────────────────────── */
 
@@ -87,6 +87,27 @@ export function getCurrentDateString(): string {
 /** 'YYYY-MM-DD HH:mm' (한국 시간) */
 export function getCurrentDateTimeString(): string {
   return `${getCurrentDateString()} ${getCurrentTimeString()}`;
+}
+
+/* ───────────────────────── 심부 3지점 측정 ───────────────────────── */
+
+/** 한 번 계측할 때 재는 지점 수 */
+export const CORE_POINT_COUNT = 3;
+/** 지점 사이 간격(cm) — 같은 높이에서 이만큼 띄워 잰다 */
+export const CORE_POINT_SPACING_CM = 30;
+
+function round1(value: number): number {
+  return Number(value.toFixed(1));
+}
+
+/** 지점별 값의 평균. 한 지점만 재도 그 값이 평균이 된다. */
+export function averageCorePoints(points: CorePoint[]): { coreTemp: number; moisture: number } {
+  const valid = points.filter(p => Number.isFinite(p.coreTemp) && Number.isFinite(p.moisture));
+  if (valid.length === 0) return { coreTemp: 0, moisture: 0 };
+  return {
+    coreTemp: round1(valid.reduce((sum, p) => sum + p.coreTemp, 0) / valid.length),
+    moisture: round1(valid.reduce((sum, p) => sum + p.moisture, 0) / valid.length),
+  };
 }
 
 /* ───────────────────────── 더미(목장 + 하역 장소) ───────────────────────── */
