@@ -168,7 +168,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     normalizeGoogleConfig(getStorageItem<GoogleSheetsConfig>('google_config', DEFAULT_GOOGLE_CONFIG))
   );
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('monitoring');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('today');
   const [historyPileKey, setHistoryPileKey] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);

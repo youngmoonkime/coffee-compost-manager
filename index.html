@@ -1,7 +1,22 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function() {
+        try {
+          var t = localStorage.getItem('coffeepost_theme');
+          if (t === 'light') {
+            document.documentElement.classList.remove('dark');
+          } else {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>커피박 부숙 관리 - 건준목장</title>
     <meta name="description" content="목장 깔개 활용을 위한 커피박 부숙 기록 및 사용 시점 안내" />
@@ -11,7 +26,7 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
   </head>
-  <body class="bg-surface font-body-md text-on-surface flex flex-col antialiased selection:bg-primary selection:text-on-primary h-full break-keep">
+  <body class="bg-[#F5F5F7] dark:bg-[#000000] font-body-md text-[#1D1D1F] dark:text-[#F5F5F7] flex flex-col antialiased selection:bg-[#315C36] selection:text-white h-full break-keep">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

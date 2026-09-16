@@ -66,22 +66,22 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
     <>
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="material-symbols-outlined text-primary text-[18px]">show_chart</span>
-          <h3 className="font-headline-sm text-[14px] font-bold text-on-surface tracking-tight whitespace-nowrap">
+          <span className="material-symbols-outlined text-primary dark:text-[#34C759] text-[18px]">show_chart</span>
+          <h3 className="font-headline-sm text-[14px] font-bold text-on-surface dark:text-[#F5F5F7] tracking-tight whitespace-nowrap">
             함수율 추이
           </h3>
           {records.length > VISIBLE_POINTS && (
-            <span className="font-caption text-[11px] text-outline whitespace-nowrap">최근 {VISIBLE_POINTS}회</span>
+            <span className="font-caption text-[11px] text-outline dark:text-[#8E8E93] whitespace-nowrap">최근 {VISIBLE_POINTS}회</span>
           )}
         </div>
-        <span className="font-caption text-[11px] text-primary font-bold whitespace-nowrap">
+        <span className="font-caption text-[11px] text-primary dark:text-[#34C759] font-bold whitespace-nowrap">
           깔개 사용 {bandMin}~{bandMax}%
         </span>
       </div>
 
-      <div ref={containerRef} className="w-full relative bg-surface-container-low rounded-xl px-2 pt-2 pb-1.5">
+      <div ref={containerRef} className="w-full relative bg-surface-container-low dark:bg-[#2C2C2E]/60 rounded-xl px-2 pt-2 pb-1.5">
         {logs.length === 0 ? (
-          <div className="w-full flex items-center justify-center text-outline text-xs" style={{ height: CHART_HEIGHT }}>
+          <div className="w-full flex items-center justify-center text-outline dark:text-[#8E8E93] text-xs" style={{ height: CHART_HEIGHT }}>
             기록이 없습니다.
           </div>
         ) : (
@@ -155,9 +155,9 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
             </svg>
 
             {/* 하단 X축 라벨 */}
-            <div className="flex justify-between items-center text-[9.5px] font-label-numeric text-outline px-1 pt-1.5">
+            <div className="flex justify-between items-center text-[9.5px] font-label-numeric text-outline dark:text-[#8E8E93] px-1 pt-1.5">
               {logs.map((log, index) => (
-                <span key={log.id} className={index === logs.length - 1 ? 'text-secondary font-bold' : ''}>
+                <span key={log.id} className={index === logs.length - 1 ? 'text-secondary dark:text-[#F5F5F7] font-bold' : ''}>
                   {Number(log.date.slice(5, 7))}/{Number(log.date.slice(8, 10))}
                 </span>
               ))}
@@ -172,7 +172,7 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
 
   return (
     <section className="w-full">
-      <div className="bg-surface-container-lowest rounded-2xl p-3.5 shadow-sm border border-outline-variant/20">{body}</div>
+      <div className="bg-surface-container-lowest dark:bg-[#1C1C1E] rounded-2xl p-3.5 shadow-sm border border-outline-variant/20 dark:border-white/10">{body}</div>
     </section>
   );
 };

@@ -1,5 +1,5 @@
 import React from 'react';
-import { MeasurementInputGrid } from './MeasurementInputGrid';
+import { MeasurementFlow } from '../measurement/MeasurementFlow';
 
 /**
  * 측정 기록 탭은 입력에만 집중한다: 장소 → 수거량 → 심부 → 외기 → 사진 → 저장.
@@ -7,6 +7,7 @@ import { MeasurementInputGrid } from './MeasurementInputGrid';
  */
 export const MonitoringView: React.FC = () => (
   <div className="flex flex-col w-full pb-8">
-    <MeasurementInputGrid />
+    <MeasurementFlow />
   </div>
 );
+

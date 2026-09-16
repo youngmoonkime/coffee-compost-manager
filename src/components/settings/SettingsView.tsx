@@ -1,15 +1,42 @@
 import React, { useState } from 'react';
+import {
+  ArrowLeft,
+  Sliders,
+  Table,
+  Database,
+  Info,
+  RotateCcw,
+  Sun,
+  Moon,
+} from 'lucide-react';
 import { useCompost } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import { DEFAULT_SETTINGS, SHEET_WEBHOOK_URL } from '../../constants/defaultData';
 import { REQUIRED_SCRIPT_VERSION, testGoogleSheetsConnection } from '../../services/googleSheetsService';
 import { getCurrentDateTimeString } from '../../utils/calculations';
-import { ScriptVersionNotice } from '../common/ScriptVersionNotice';
+import { Card } from '../ui/Card';
+import { Button } from '../ui/Button';
+
+type SettingSection = 'criteria' | 'sheets' | 'data' | 'app';
 
 export const SettingsView: React.FC = () => {
-  const { settings, updateSettings, googleConfig, updateGoogleConfig, setIsGoogleModalOpen, resetAllData, records } =
-    useCompost();
+  const {
+    settings,
+    updateSettings,
+    googleConfig,
+    updateGoogleConfig,
+    setIsGoogleModalOpen,
+    resetAllData,
+    records,
+    pendingCount,
+    setActiveTab,
+  } = useCompost();
   const { showToast } = useToast();
+  const { theme, setTheme } = useTheme();
+
+  // 계층형 섹션 선택 상태
+  const [activeSection, setActiveSection] = useState<SettingSection>('criteria');
 
   // 판정 기준 상태
   const [usableMin, setUsableMin] = useState<number>(settings.usableMoistureMin);
@@ -18,7 +45,6 @@ export const SettingsView: React.FC = () => {
   const [highMoisture, setHighMoisture] = useState<number>(settings.highMoistureThreshold);
   const [highTemp, setHighTemp] = useState<number>(settings.highTempThreshold);
 
-  // 구글 시트 주소는 앱에 고정돼 있어 연결 테스트만 한다
   const [isTesting, setIsTesting] = useState<boolean>(false);
 
   const handleSaveSettings = (e: React.FormEvent) => {
@@ -44,13 +70,13 @@ export const SettingsView: React.FC = () => {
     setHighMoisture(DEFAULT_SETTINGS.highMoistureThreshold);
     setHighTemp(DEFAULT_SETTINGS.highTempThreshold);
     updateSettings(DEFAULT_SETTINGS);
-    showToast('기본 설정값으로 초기화되었습니다', undefined, 'info');
+    showToast('기본 설정값으로 복원되었습니다', undefined, 'info');
   };
 
   const handleResetAllData = async () => {
     const confirmed = window.confirm(
       `기록 ${records.length}건을 모두 삭제합니다.\n` +
-      '앱과 구글 시트(모든 목장 탭) 양쪽에서 지워지며, 되돌릴 수 없습니다.\n\n' +
+      '앱과 구글 시트 양쪽에서 지워지며 되돌릴 수 없습니다.\n\n' +
       '(연동 설정과 판정 기준은 유지됩니다)\n\n계속할까요?'
     );
     if (!confirmed) return;
@@ -78,7 +104,7 @@ export const SettingsView: React.FC = () => {
       if (res.verified && (res.scriptVersion ?? 1) < REQUIRED_SCRIPT_VERSION) {
         showToast(
           `연결은 됐지만 스크립트가 v${res.scriptVersion ?? 1}입니다`,
-          `최신 v${REQUIRED_SCRIPT_VERSION} 코드를 붙여넣고 [배포 관리 → 연필 → 버전: 새 버전]으로 배포해주세요.`,
+          `최신 v${REQUIRED_SCRIPT_VERSION} 코드를 반영해주세요.`,
           'warning'
         );
       } else if (res.verified) {
@@ -91,258 +117,336 @@ export const SettingsView: React.FC = () => {
     }
   };
 
+  const sections: { id: SettingSection; label: string; icon: React.ElementType }[] = [
+    { id: 'criteria', label: '측정·판정 기준', icon: Sliders },
+    { id: 'sheets', label: 'Google Sheets', icon: Table },
+    { id: 'data', label: '데이터 관리', icon: Database },
+    { id: 'app', label: '화면 및 정보', icon: Info },
+  ];
+
   return (
-    <div className="flex flex-col w-full pb-8">
-      <div className="mb-4">
-        <h2 className="font-headline-md text-headline-md text-on-surface">설정 및 현장 관리</h2>
-        <p className="font-caption text-caption text-on-surface-variant mt-0.5">
-          깔개 사용 기준·경보 기준 및 구글 스프레드시트 연동
-        </p>
+    <div className="flex flex-col w-full max-w-xl mx-auto pb-10 space-y-5">
+      {/* 1. 상단 네비게이션 헤더 */}
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab('today')}
+          className="w-9 h-9 rounded-full bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 flex items-center justify-center hover:bg-[#F2F2F7] dark:hover:bg-[#2C2C2E] active:scale-95 transition-all text-[#1D1D1F] dark:text-[#F5F5F7]"
+          title="오늘 화면으로 돌아가기"
+          aria-label="오늘 화면으로 돌아가기"
+        >
+          <ArrowLeft className="w-4 h-4" />
+        </button>
+        <div>
+          <h2 className="text-2xl sm:text-3xl font-bold text-[#1D1D1F] dark:text-[#FFFFFF] tracking-tight">
+            설정
+          </h2>
+          <p className="text-xs sm:text-sm text-[#6E6E73] dark:text-[#8E8E93] mt-0.5">
+            현장 부숙 기준 및 시스템 구성을 계층별로 관리합니다.
+          </p>
+        </div>
       </div>
 
-      <form onSubmit={handleSaveSettings} className="space-y-4">
-        {/* 1. 구글 스프레드시트 자동 동기화 설정 카드 */}
-        <div className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 space-y-3 relative overflow-hidden">
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center">
-                <span className="material-symbols-outlined text-[20px]">table_chart</span>
-              </div>
-              <div>
-                <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">
-                  구글 스프레드시트 자동 연동
-                </h3>
-                <span className="font-caption text-[11px] text-outline">
-                  기록 저장 시 자동 행(Row) 추가
-                </span>
-              </div>
-            </div>
+      {/* 2. 계층형 카테고리 세그먼트 셀렉터 (Apple Segmented Bar) */}
+      <div className="flex bg-[#E5E5EA]/60 dark:bg-[#2C2C2E] p-1 rounded-2xl gap-1">
+        {sections.map(sec => {
+          const isActive = activeSection === sec.id;
+          const Icon = sec.icon;
+          return (
+            <button
+              key={sec.id}
+              type="button"
+              onClick={() => setActiveSection(sec.id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-1 rounded-xl text-xs font-bold transition-all ${
+                isActive
+                  ? 'bg-white dark:bg-[#1C1C1E] text-[#1D1D1F] dark:text-white shadow-xs'
+                  : 'text-[#6E6E73] dark:text-[#8E8E93] hover:text-[#1D1D1F] dark:hover:text-white'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{sec.label}</span>
+              <span className="sm:hidden">{sec.label.split(' ')[0]}</span>
+            </button>
+          );
+        })}
+      </div>
 
+      {/* 3. 계층형 섹션 본문 */}
+      {/* 3-1. 측정 및 판정 기준 섹션 */}
+      {activeSection === 'criteria' && (
+        <form onSubmit={handleSaveSettings} className="space-y-4 animate-in fade-in duration-150">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-xs font-bold text-[#6E6E73] dark:text-[#8E8E93]">
+              현장 측정 및 부숙 판정 기준치
+            </span>
             <button
               type="button"
-              onClick={() => setIsGoogleModalOpen(true)}
-              className="text-xs font-bold text-secondary hover:underline flex items-center gap-0.5 px-2.5 py-1 rounded-lg bg-secondary-container/50"
+              onClick={handleResetDefaults}
+              className="text-xs text-[#6E6E73] dark:text-[#8E8E93] hover:text-[#1D1D1F] dark:hover:text-white hover:underline flex items-center gap-1"
             >
-              <span className="material-symbols-outlined text-[15px]">settings_ethernet</span>
-              <span>연동 마법사 &amp; 가이드</span>
+              <RotateCcw className="w-3 h-3" /> 기본값 복원
             </button>
           </div>
 
-          {/* 연동 상태 — 켜고 끄는 스위치가 아니라 사실 그대로의 안내.
-              시트가 원본이므로 모든 변경이 항상 반영되어야 한다.
-              (전송을 끌 수 있게 두면 앱에만 남은 기록이 다음 접속 때 사라진다) */}
-          <div className="flex items-start gap-2.5 p-2.5 rounded-xl bg-surface-container-low">
-            <span className="material-symbols-outlined text-[20px] shrink-0 text-primary">cloud_done</span>
-            <div className="flex flex-col min-w-0">
-              <span className="font-label-md text-xs font-bold text-on-surface">
-                "커피박 부숙 관리 대장" 시트가 원본 저장소입니다
-              </span>
-              <span className="font-caption text-[10.5px] text-outline leading-relaxed">
-                추가·수정·삭제가 모두 시트에 즉시 반영되고, 앱을 열면 시트에서 다시 불러옵니다.
-              </span>
-            </div>
-          </div>
-
-          {/* 고정된 웹 앱 주소 */}
-          <div>
-            <label className="font-label-sm text-xs font-semibold text-on-surface flex items-center gap-1 mb-1">
-              <span className="material-symbols-outlined text-[14px] text-outline">lock</span>
-              연결된 웹 앱 주소 (앱에 고정)
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="url"
-                value={SHEET_WEBHOOK_URL}
-                readOnly
-                aria-readonly="true"
-                onFocus={(e) => e.currentTarget.select()}
-                className="flex-1 min-w-0 h-11 bg-surface-container-low rounded-xl px-3 text-xs text-on-surface-variant border border-outline-variant/40 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={handleTestConnection}
-                disabled={isTesting}
-                className="px-3 h-11 bg-secondary-container text-on-secondary-container rounded-xl text-xs font-bold shrink-0 hover:opacity-90 active:scale-95 transition-all flex items-center gap-1"
-              >
-                <span className="material-symbols-outlined text-[16px]">
-                  {isTesting ? 'sync' : 'network_check'}
+          <Card className="p-0 overflow-hidden divide-y divide-black/5 dark:divide-white/10 bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 shadow-sm">
+            {/* 깔개 사용 가능 함수율 하한 */}
+            <div className="flex items-center justify-between p-3.5 sm:p-4">
+              <div>
+                <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">
+                  깔개 사용 함수율 하한
                 </span>
-                <span>{isTesting ? '테스트중' : '연결 테스트'}</span>
-              </button>
+                <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">과도 건조 방지 하한 기준</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={usableMin}
+                  onChange={e => setUsableMin(Number(e.target.value))}
+                  className="w-16 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
+                />
+                <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">%</span>
+              </div>
             </div>
-            {googleConfig.lastSyncTime && (
-              <p className="font-caption text-[11px] text-outline mt-1.5 flex items-center gap-1">
-                <span className={`w-1.5 h-1.5 rounded-full ${
-                  googleConfig.lastSyncStatus === 'success' ? 'bg-primary' : 'bg-error'
-                }`}></span>
-                최근 동기화: {googleConfig.lastSyncTime}
-                {googleConfig.lastSyncStatus === 'success' ? ' (정상)' : ' (실패)'}
-                {googleConfig.scriptVersion !== undefined && ` · 스크립트 v${googleConfig.scriptVersion}`}
-              </p>
-            )}
-            <ScriptVersionNotice className="mt-2" />
-          </div>
-        </div>
 
-        {/* 2. 깔개 사용 기준 */}
-        <div className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 space-y-3">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="material-symbols-outlined text-primary text-[20px]">tune</span>
-            <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">
-              깔개 사용 기준
-            </h3>
-          </div>
+            {/* 깔개 사용 가능 함수율 상한 */}
+            <div className="flex items-center justify-between p-3.5 sm:p-4">
+              <div>
+                <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">
+                  깔개 사용 함수율 상한
+                </span>
+                <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">이하로 감량 시 우사 투입 가능</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={usableMax}
+                  onChange={e => setUsableMax(Number(e.target.value))}
+                  className="w-16 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
+                />
+                <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">%</span>
+              </div>
+            </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-label-sm text-xs font-semibold text-on-surface">
-                깔개 사용 가능 심부 함수율
-              </label>
-              <span className="font-label-numeric text-xs font-bold text-primary">
-                {usableMin}~{usableMax}%
+            {/* 과습 경보 기준 */}
+            <div className="flex items-center justify-between p-3.5 sm:p-4">
+              <div>
+                <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">
+                  과습 주의 경보 기준
+                </span>
+                <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">초과 시 교반 및 건조박 혼합 권장</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={highMoisture}
+                  onChange={e => setHighMoisture(Number(e.target.value))}
+                  className="w-16 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
+                />
+                <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">%</span>
+              </div>
+            </div>
+
+            {/* 과열 경보 기준 */}
+            <div className="flex items-center justify-between p-3.5 sm:p-4">
+              <div>
+                <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">
+                  과열 주의 경보 기준
+                </span>
+                <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">초과 시 방열 교반 권장</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={highTemp}
+                  onChange={e => setHighTemp(Number(e.target.value))}
+                  className="w-16 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
+                />
+                <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">℃</span>
+              </div>
+            </div>
+
+            {/* 탐침 깊이 */}
+            <div className="flex items-center justify-between p-3.5 sm:p-4">
+              <div>
+                <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">
+                  심부온도 측정 깊이
+                </span>
+                <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">현장 센서 삽입 기준 깊이</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  value={probeDepth}
+                  onChange={e => setProbeDepth(Number(e.target.value))}
+                  className="w-16 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
+                />
+                <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">cm</span>
+              </div>
+            </div>
+          </Card>
+
+          <Button type="submit" variant="primary" size="md" className="w-full">
+            판정 기준 저장하기
+          </Button>
+        </form>
+      )}
+
+      {/* 3-2. Google Sheets 연동 섹션 */}
+      {activeSection === 'sheets' && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <Card className="p-4 sm:p-5 bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-[#315C36]/10 text-[#315C36] dark:text-[#34C759] flex items-center justify-center">
+                  <Table className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                    Google Sheets 동기화
+                  </h3>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#315C36]/15 text-[#315C36] dark:text-[#34C759] text-[10px] font-bold mt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#34C759]" />
+                    자동 연동 가동 중
+                  </span>
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setIsGoogleModalOpen(true)}
+              >
+                상세 설정
+              </Button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-[#F2F2F7] dark:bg-[#2C2C2E] text-xs space-y-1 font-mono break-all">
+              <span className="text-[10px] font-sans font-semibold text-[#8E8E93] block">
+                연동 웹앱 웹훅 주소:
               </span>
+              <span className="text-[#6E6E73] dark:text-[#8E8E93]">{SHEET_WEBHOOK_URL}</span>
             </div>
-            <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-              <span className="font-caption text-[11px] text-outline">하한</span>
-              <input
-                type="range"
-                min="15"
-                max="45"
-                step="1"
-                value={usableMin}
-                aria-label="깔개 사용 함수율 하한"
-                onChange={(e) => setUsableMin(parseInt(e.target.value))}
-                className="w-full accent-primary cursor-pointer"
-              />
-              <span className="font-caption text-[11px] text-outline">상한</span>
-              <input
-                type="range"
-                min="25"
-                max="60"
-                step="1"
-                value={usableMax}
-                aria-label="깔개 사용 함수율 상한"
-                onChange={(e) => setUsableMax(parseInt(e.target.value))}
-                className="w-full accent-primary cursor-pointer"
-              />
-            </div>
-            <p className={`font-caption text-[11px] mt-0.5 break-keep ${usableMin >= usableMax ? 'text-error' : 'text-outline'}`}>
-              {usableMin >= usableMax
-                ? '하한이 상한보다 작아야 합니다.'
-                : '같은 장소의 함수율이 이 범위에 들면 깔개 사용 가능으로 안내합니다.'}
-            </p>
-          </div>
 
-          <div className="pt-2 border-t border-outline-variant/20">
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-label-sm text-xs font-semibold text-on-surface">
-                심부온도 측정 깊이
-              </label>
-              <span className="font-label-numeric text-xs font-bold text-primary">
-                {probeDepth}cm
-              </span>
+            <div className="flex items-center justify-between pt-2 border-t border-black/5 dark:border-white/10 text-xs text-[#6E6E73] dark:text-[#8E8E93]">
+              <span>스크립트 버전: v{googleConfig.scriptVersion ?? 1}</span>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={isTesting}
+                onClick={handleTestConnection}
+              >
+                {isTesting ? '테스트 중…' : '연결 진단 테스트'}
+              </Button>
             </div>
-            <input
-              type="range"
-              min="5"
-              max="50"
-              step="5"
-              value={probeDepth}
-              onChange={(e) => setProbeDepth(parseInt(e.target.value))}
-              className="w-full accent-primary cursor-pointer"
-            />
-            <p className="font-caption text-[11px] text-outline mt-0.5">
-              계측 화면에 안내되는 탐침 삽입 깊이입니다. 현장 기준이 바뀌면 여기서 조정하세요.
-            </p>
-          </div>
+          </Card>
         </div>
+      )}
 
-        {/* 3. 과열 및 과습 주의 설정 */}
-        <div className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 space-y-3">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="material-symbols-outlined text-error text-[20px]">warning</span>
-            <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">
-              혼합 필요 (뒤집기) 경보 기준
-            </h3>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-label-sm text-xs font-semibold text-on-surface">
-                과열 심부 온도 경보치
-              </label>
-              <span className="font-label-numeric text-xs font-bold text-error">
-                &gt; {highTemp}℃
-              </span>
+      {/* 3-3. 데이터 관리 섹션 */}
+      {activeSection === 'data' && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <Card className="p-4 sm:p-5 bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 shadow-sm space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-black/5 dark:bg-white/10 text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center justify-center">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                  로컬 및 시트 데이터 현황
+                </h3>
+                <p className="text-xs text-[#6E6E73] dark:text-[#8E8E93] mt-0.5">
+                  총 {records.length}건의 측정 기록 보관 중
+                </p>
+              </div>
             </div>
-            <input
-              type="range"
-              min="55"
-              max="75"
-              step="1"
-              value={highTemp}
-              onChange={(e) => setHighTemp(parseInt(e.target.value))}
-              className="w-full accent-error cursor-pointer"
-            />
-          </div>
 
-          <div className="pt-2 border-t border-outline-variant/20">
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-label-sm text-xs font-semibold text-on-surface">
-                과습 함수율 경보치
-              </label>
-              <span className="font-label-numeric text-xs font-bold text-error">
-                &gt; {highMoisture}%
-              </span>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-3 rounded-xl bg-[#F2F2F7] dark:bg-[#2C2C2E]">
+                <span className="text-[#8E8E93] block text-[11px]">오프라인 대기 큐</span>
+                <strong className="text-sm font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                  {pendingCount}건
+                </strong>
+              </div>
+              <div className="p-3 rounded-xl bg-[#F2F2F7] dark:bg-[#2C2C2E]">
+                <span className="text-[#8E8E93] block text-[11px]">동기화 완료 이력</span>
+                <strong className="text-sm font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                  {records.length - pendingCount}건
+                </strong>
+              </div>
             </div>
-            <input
-              type="range"
-              min="55"
-              max="75"
-              step="1"
-              value={highMoisture}
-              onChange={(e) => setHighMoisture(parseInt(e.target.value))}
-              className="w-full accent-error cursor-pointer"
-            />
-          </div>
-        </div>
 
-        {/* 액션 버튼 */}
-        <div className="flex gap-2 pt-2">
-          <button
-            type="button"
-            onClick={handleResetDefaults}
-            className="flex-1 h-12 bg-surface-container-low hover:bg-surface-container text-on-surface font-label-md text-xs font-bold rounded-xl transition-colors cursor-pointer"
-          >
-            기본값 복원
-          </button>
-          <button
-            type="submit"
-            className="flex-[2] h-12 bg-primary hover:bg-primary/90 text-on-primary font-headline-sm text-sm font-bold rounded-xl shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
-          >
-            <span className="material-symbols-outlined text-[18px]">check</span>
-            모든 설정 저장
-          </button>
+            {/* 위험 구역: 전체 삭제 */}
+            <div className="pt-3 border-t border-black/5 dark:border-white/10 flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold text-[#FF3B30] dark:text-[#FF453A] block">
+                  전체 기록 초기화
+                </span>
+                <span className="text-[11px] text-[#6E6E73] dark:text-[#8E8E93]">
+                  앱과 시트의 모든 데이터를 영구 삭제합니다.
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={handleResetAllData}
+              >
+                전체 삭제
+              </Button>
+            </div>
+          </Card>
         </div>
-      </form>
+      )}
 
-      {/* 기록 전체 삭제 */}
-      <div className="mt-4 bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20">
-        <h3 className="font-headline-sm text-[15px] font-bold text-on-surface">데이터 전체 삭제</h3>
-        <p className="font-caption text-[11px] text-on-surface-variant mt-1 leading-relaxed break-keep">
-          저장된 기록({records.length}건)을 앱과 구글 시트(모든 목장 탭) 양쪽에서 모두 지웁니다. 되돌릴 수 없습니다.
-          <br />
-          구글 시트 연동 설정과 판정 기준은 그대로 유지됩니다.
-        </p>
-        <button
-          type="button"
-          onClick={handleResetAllData}
-          className="mt-3 w-full h-11 rounded-xl border border-error/40 text-error font-label-md text-xs font-bold hover:bg-error-container/40 active:scale-99 transition-all flex items-center justify-center gap-1.5"
-        >
-          <span className="material-symbols-outlined text-[17px]">delete_sweep</span>
-          모든 이력 삭제
-        </button>
-      </div>
+      {/* 3-4. 화면 및 앱 정보 섹션 */}
+      {activeSection === 'app' && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          <Card className="p-4 sm:p-5 bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 shadow-sm space-y-4">
+            <div>
+              <span className="text-xs font-bold text-[#6E6E73] dark:text-[#8E8E93] block mb-2">
+                화면 테마 설정
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTheme('dark')}
+                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                    theme === 'dark'
+                      ? 'bg-[#315C36] text-white shadow-xs'
+                      : 'bg-[#F2F2F7] dark:bg-[#2C2C2E] text-[#6E6E73] dark:text-[#8E8E93]'
+                  }`}
+                >
+                  <Moon className="w-4 h-4" /> 다크 모드 (기본)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTheme('light')}
+                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                    theme === 'light'
+                      ? 'bg-[#315C36] text-white shadow-xs'
+                      : 'bg-[#F2F2F7] dark:bg-[#2C2C2E] text-[#6E6E73] dark:text-[#8E8E93]'
+                  }`}
+                >
+                  <Sun className="w-4 h-4" /> 라이트 모드
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-black/5 dark:border-white/10 space-y-1 text-xs text-[#6E6E73] dark:text-[#8E8E93]">
+              <div className="flex justify-between">
+                <span>애플리케이션 버전</span>
+                <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">v2.4.0</span>
+              </div>
+              <div className="flex justify-between">
+                <span>적용 목장</span>
+                <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">건준목장</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 };

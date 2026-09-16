@@ -1,48 +1,53 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useState } from 'react';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { CompostProvider, useCompost } from './contexts/CompostContext';
 import { ToastProvider } from './contexts/ToastContext';
-import { Header } from './components/common/Header';
-import { Navigation } from './components/common/Navigation';
 import { Toast } from './components/common/Toast';
 import { GoogleSyncModal } from './components/common/GoogleSyncModal';
+import { HelpModal } from './components/common/HelpModal';
+import { AboutModal } from './components/common/AboutModal';
+import { AppShell } from './components/app/AppShell';
+import { TodayView } from './components/dashboard/TodayView';
 import { MonitoringView } from './components/monitoring/MonitoringView';
 import { LocationStatusView } from './components/history/LocationStatusView';
+import { SimulationView } from './components/simulation/SimulationView';
 import { SettingsView } from './components/settings/SettingsView';
 
-const MainContent: React.FC = () => {
+const TabContent: React.FC = () => {
   const { activeTab } = useCompost();
-  const scrollRef = useRef<HTMLElement>(null);
-
-  // 탭 전환 시 이전 탭의 스크롤 위치가 남지 않도록 상단으로 복귀
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-  }, [activeTab]);
 
   return (
-    <main
-      ref={scrollRef}
-      className="flex flex-col flex-1 min-h-0 relative w-full max-w-xl mx-auto pt-20 overflow-y-auto overflow-x-hidden px-4 sm:px-5 smooth-scroll scroll-area"
-    >
+    <div key={activeTab} className="view-enter w-full">
+      {activeTab === 'today' && <TodayView />}
       {activeTab === 'monitoring' && <MonitoringView />}
       {activeTab === 'history' && <LocationStatusView />}
-      {activeTab === 'settings' && <SettingsView />}
-    </main>
+      {activeTab === 'simulation' && <SimulationView />}
+      {(activeTab === 'settings' || activeTab === 'data_management') && <SettingsView />}
+    </div>
   );
 };
 
 export const App: React.FC = () => {
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isAboutOpen, setIsAboutOpen] = useState(false);
+
   return (
-    <ToastProvider>
-      <CompostProvider>
-        <div className="bg-surface text-on-surface flex flex-col antialiased selection:bg-primary selection:text-on-primary h-full min-h-0 w-full overflow-hidden">
-          <Header />
+    <ThemeProvider>
+      <ToastProvider>
+        <CompostProvider>
+          <AppShell
+            onOpenHelp={() => setIsHelpOpen(true)}
+            onOpenAbout={() => setIsAboutOpen(true)}
+          >
+            <TabContent />
+          </AppShell>
           <Toast />
           <GoogleSyncModal />
-          <MainContent />
-          <Navigation />
-        </div>
-      </CompostProvider>
-    </ToastProvider>
+          <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
+          <AboutModal isOpen={isAboutOpen} onClose={() => setIsAboutOpen(false)} />
+        </CompostProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 };
 

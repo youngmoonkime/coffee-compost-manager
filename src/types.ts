@@ -72,6 +72,7 @@ export interface MeasurementRecord {
 
 /** 목장 + 하역 장소 = 하나의 더미 */
 export interface Pile {
+
   ranchName: string;
   location: string;
 }
@@ -97,7 +98,7 @@ export interface GoogleSheetsConfig {
   scriptVersion?: number;
 }
 
-export type ActiveTab = 'monitoring' | 'history' | 'settings';
+export type ActiveTab = 'today' | 'monitoring' | 'history' | 'simulation' | 'settings' | 'data_management';
 
 export interface ToastMessage {
   id: string;

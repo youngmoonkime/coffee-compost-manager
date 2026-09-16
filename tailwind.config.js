@@ -4,7 +4,9 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  darkMode: "class",
   theme: {
+
     extend: {
       colors: {
         "on-primary-fixed-variant": "#314d2e",
@@ -13,7 +15,19 @@ export default {
         "on-error": "#ffffff",
         "secondary-container": "#fdceab",
         "primary-fixed-dim": "#aecfa6",
-        "primary": "#183317",
+        "primary": "#315C36", // Brand Green
+        "brand-green": "#315C36",
+        "brand-soft": "#E7F0E6",
+        "apple-bg": "#F5F5F7",
+        "apple-surface": "#FFFFFF",
+        "apple-subsurface": "#F2F2F7",
+        "apple-text": "#1D1D1F",
+        "apple-subtext": "#6E6E73",
+        "apple-border": "rgba(0, 0, 0, 0.06)",
+        "apple-divider": "rgba(0, 0, 0, 0.08)",
+        "apple-success": "#34C759",
+        "apple-warning": "#FF9F0A",
+        "apple-error": "#FF3B30",
         "outline-variant": "#c3c8be",
         "on-primary": "#ffffff",
         "on-surface-variant": "#434840",

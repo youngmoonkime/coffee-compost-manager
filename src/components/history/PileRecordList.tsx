@@ -57,17 +57,17 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
   return (
     <section className="w-full">
       <div className="flex items-center gap-1.5 mb-2 px-1">
-        <span className="material-symbols-outlined text-primary text-[18px]">history</span>
-        <h3 className="font-headline-sm text-[15px] font-bold text-on-surface tracking-tight whitespace-nowrap">
+        <span className="material-symbols-outlined text-primary dark:text-[#34C759] text-[18px]">history</span>
+        <h3 className="font-headline-sm text-[15px] font-bold text-on-surface dark:text-[#F5F5F7] tracking-tight whitespace-nowrap">
           기록
         </h3>
-        <span className="px-1.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-caption text-[10px] font-bold whitespace-nowrap">
+        <span className="px-1.5 py-0.5 rounded-full bg-surface-container-high dark:bg-[#2C2C2E] text-on-surface-variant dark:text-[#8E8E93] font-caption text-[10px] font-bold whitespace-nowrap">
           {rows.length}건
         </span>
       </div>
 
       {rows.length === 0 ? (
-        <div className="bg-surface-container-lowest rounded-xl p-4 text-center text-xs text-outline border border-outline-variant/20">
+        <div className="bg-surface-container-lowest dark:bg-[#1C1C1E] rounded-xl p-4 text-center text-xs text-outline dark:text-[#8E8E93] border border-outline-variant/20 dark:border-white/10">
           저장된 기록이 없습니다.
         </div>
       ) : (
@@ -80,12 +80,14 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
             return (
               <div
                 key={record.id}
-                className="bg-surface-container-lowest rounded-xl p-2.5 shadow-sm border border-outline-variant/20 flex items-center justify-between group hover:border-primary/40 transition-colors"
+                className="bg-surface-container-lowest dark:bg-[#1C1C1E] rounded-xl p-2.5 shadow-sm border border-outline-variant/20 dark:border-white/10 flex items-center justify-between group hover:border-primary/40 dark:hover:border-primary/60 transition-colors"
               >
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div
                     className={`w-11 h-10 rounded-lg flex flex-col items-center justify-center shrink-0 ${
-                      idx === 0 ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container-low text-on-surface-variant'
+                      idx === 0
+                        ? 'bg-secondary-container dark:bg-[#7a573b]/40 text-on-secondary-container dark:text-[#ffdcc3]'
+                        : 'bg-surface-container-low dark:bg-[#2C2C2E] text-on-surface-variant dark:text-[#8E8E93]'
                     }`}
                   >
                     <span className="font-label-numeric text-[12.5px] font-bold leading-tight tabular-nums">
@@ -96,7 +98,7 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-label-sm text-[13px] text-on-surface font-bold whitespace-nowrap">
+                      <span className="font-label-sm text-[13px] text-on-surface dark:text-[#F5F5F7] font-bold whitespace-nowrap">
                         함수율 {record.moisture}%
                       </span>
                       {moistureDelta !== null && (
@@ -104,24 +106,24 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                           title="직전 기록 대비 함수율 변화"
                           className={`px-1 py-0.5 rounded font-caption text-[10px] whitespace-nowrap tabular-nums ${
                             moistureDelta < 0
-                              ? 'bg-primary-fixed text-on-primary-fixed'
+                              ? 'bg-primary-fixed dark:bg-[#315C36]/30 text-on-primary-fixed dark:text-[#34C759]'
                               : moistureDelta > 0
-                              ? 'bg-error-container text-on-error-container'
-                              : 'bg-surface-container-high text-on-surface-variant'
+                              ? 'bg-error-container dark:bg-[#FF3B30]/20 text-on-error-container dark:text-[#FF453A]'
+                              : 'bg-surface-container-high dark:bg-[#2C2C2E] text-on-surface-variant dark:text-[#8E8E93]'
                           }`}
                         >
                           {formatSigned(moistureDelta)}%p
                         </span>
                       )}
-                      <span className="px-1 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-caption text-[10px] whitespace-nowrap tabular-nums">
+                      <span className="px-1 py-0.5 rounded bg-surface-container-high dark:bg-[#2C2C2E] text-on-surface-variant dark:text-[#8E8E93] font-caption text-[10px] whitespace-nowrap tabular-nums">
                         심부 {record.coreTemp}℃{tempDelta !== null ? ` (${formatSigned(tempDelta)})` : ''}
                       </span>
                     </div>
-                    <span className="font-caption text-[11px] text-outline block mt-0.5 truncate">
+                    <span className="font-caption text-[11px] text-outline dark:text-[#8E8E93] block mt-0.5 truncate">
                       수거 {record.collectedKg.toLocaleString('ko-KR')}kg · 외기 {record.ambientTemp}℃ · 습도 {record.ambientHum}%
                     </span>
                     {record.notes && (
-                      <span className="font-caption text-[11px] text-secondary mt-1 flex items-start gap-1" title={record.notes}>
+                      <span className="font-caption text-[11px] text-secondary dark:text-[#d8dbd2] mt-1 flex items-start gap-1" title={record.notes}>
                         <span className="material-symbols-outlined text-[13px] shrink-0 mt-px">sticky_note_2</span>
                         <span className="min-w-0 break-keep line-clamp-2">{record.notes}</span>
                       </span>
@@ -130,7 +132,7 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                       <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
                         {record.photos?.map(photo => <DriveThumb key={photo.fileId} photo={photo} />)}
                         {(record.pendingPhotoCount ?? 0) > 0 && (
-                          <span className="px-1.5 py-0.5 rounded bg-error-container text-on-error-container font-caption text-[10px] whitespace-nowrap">
+                          <span className="px-1.5 py-0.5 rounded bg-error-container dark:bg-[#FF3B30]/20 text-on-error-container dark:text-[#FF453A] font-caption text-[10px] whitespace-nowrap">
                             사진 {record.pendingPhotoCount}장 전송 대기
                           </span>
                         )}
@@ -145,7 +147,7 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                   </span>
                   <button
                     onClick={() => handleDelete(record.id, record.date)}
-                    className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-1 text-outline hover:text-error rounded-md active:scale-95"
+                    className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-1 text-outline dark:text-[#8E8E93] hover:text-error dark:hover:text-[#FF453A] rounded-md active:scale-95"
                     title="기록 삭제"
                     type="button"
                   >
