@@ -27,3 +27,8 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Temporary & debug scripts
+*.py
+sheet_htmlview.html
+test_standard_report.ts
