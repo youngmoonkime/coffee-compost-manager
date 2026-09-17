@@ -1,7 +1,92 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import './barnSimulation.css';
+
+interface SimulationEvidence {
+  title: string;
+  badge: string;
+  source: string;
+  summary: string;
+  details: string[];
+}
+
+const SIMULATION_EVIDENCES: Record<string, SimulationEvidence> = {
+  odor: {
+    title: '예상 악취 변화',
+    badge: '농촌진흥청 축산 실증 시험',
+    source: '농촌진흥청 국립축산과학원 축사 환경 개선 연구 및 한우 깔개 실증 시험 (2020~2023)',
+    summary: '커피박을 축사 톱밥 깔개와 혼합(25%~75%) 도포했을 때 복합악취(희석배수)의 시계열 상대 변화율을 적용한 모델입니다.',
+    details: [
+      '커피박 특유의 미세 다공성 분자 구조와 리그닌 성분이 암모니아(NH₃) 및 황화수소(H₂S) 등 주요 악취 가스를 물리·화학적으로 강력히 흡착합니다.',
+      '실증 데이터 기준, 50% 혼합 도포 시 초기 농도 대비 7~14일 차에 복합악취 희석배수가 70% 수준까지 감소하는 경향을 반영하였습니다.',
+      '본 수치는 통제된 표준 연구 조건의 상대 변화율을 적용한 참고 지표이며, 외기 기상 및 환기 방식에 따라 현장 실측치는 달라질 수 있습니다.',
+    ],
+  },
+  saving: {
+    title: '예상 톱밥 구매 절감',
+    badge: '축산농가 깔개 수급 실무 기준',
+    source: '전국 축산농협 톱밥 공급 단가 및 축산농가 깔개 표준 투입량 기준',
+    summary: '축사에 투입된 커피박의 부피만큼 기존 톱밥 구매를 1:1 대체한다고 가정한 경제성 산출 공식입니다.',
+    details: [
+      '산출 공식: (커피박 투입량 kg ÷ 기준 밀도 500kg/m³) × 톱밥 m³당 단가',
+      '커피박의 흡수력과 부피 계수가 관행 톱밥과 유사하여 1:1 부피 대체를 기본 전제로 산출합니다.',
+      '운송비 및 현장 가공비는 제외된 순수 원자재 구매 절감 추정치이며, 농가의 실제 계약 단가에 따라 맞춤 설정됩니다.',
+    ],
+  },
+  cycle: {
+    title: '경과 일수 및 혼합비',
+    badge: '가축 깔개 부숙 사이클 모델',
+    source: '커피박-톱밥 혼합 깔개의 수분 흡수 및 호기성 발효 지속 시험 데이터',
+    summary: '깔개 도포 직후(0일)부터 30일까지의 미생물 발효 진행 및 보송한 바닥 상태 유지 주기입니다.',
+    details: [
+      '혼합비(25%, 50%, 75%)에 따라 초기 수분 흡착량과 미생물 발효 속도가 다르게 전개됩니다.',
+      '혼합비 50% 기준 약 7~14일 차에 발효열 발생과 수분 증발의 균형이 가장 최적화되어 악취 흡착 및 깔개 건조 효과가 극대화됩니다.',
+    ],
+  },
+  mass: {
+    title: '커피박 사용량',
+    badge: '현장 실투입 계량 기준',
+    source: '커피박 부숙 관리 대장 및 매장별 정기 수거량 실측치',
+    summary: '해당 축사 구역에 실제로 살포·도포된 커피박의 총 중량(kg)입니다.',
+    details: [
+      '축사 면적(㎡)당 약 5~15kg/㎡ 투입을 권장하며, 바닥 두께 약 5~10cm 깔개층을 형성합니다.',
+      '수거된 커피박의 수분율(평균 55~65%) 상태에 따라 전체 바닥의 수분 조절 능력이 결정됩니다.',
+    ],
+  },
+  size: {
+    title: '축사 크기 및 면적',
+    badge: '한우 표준 축사 건축 규격',
+    source: '다원목장 측정동 현장 실측 및 농가 축사 표준 규격',
+    summary: '측정동 축사의 길이(m)와 폭(m)을 곱한 유효 바닥 면적(㎡)입니다.',
+    details: [
+      '축사 바닥 면적은 필요한 총 깔개 부피와 사육 두수별 가스 확산 면적을 결정하는 기본 기준값입니다.',
+      '3D 시뮬레이터에서 규격을 변경하면 필요한 커피박 권장량과 센서 간격이 자동으로 연동됩니다.',
+    ],
+  },
+  sensor: {
+    title: '센서 위치 및 악취 공간 보간',
+    badge: '공간 통계 IDW 알고리즘',
+    source: '축사 전/후방 IoT 센서 실측치 및 역거리 가중법(IDW: Inverse Distance Weighting)',
+    summary: '설치된 IoT 센서들의 지점별 희석배수 실측값을 3D 바닥 전체에 16,000 포인트로 매끄럽게 연결한 가상 악취 분포입니다.',
+    details: [
+      '각 센서 지점으로부터의 거리에 반비례하는 가중치를 부여하여 축사 전 구역의 복합악취 농도를 연속적으로 추정합니다.',
+      '정밀 유체역학(CFD) 기류 해석은 아니며, 두 측정점 사이의 상대적 악취 농도 구배를 직관적으로 파악하기 위한 시각화 모델입니다.',
+    ],
+  },
+  overview: {
+    title: '시뮬레이션 산출 근거 종합 안내',
+    badge: '연구 및 실무 통합 모델',
+    source: '농촌진흥청 축산과학원 연구 논문, 전국 축협 단가 기준, IoT 실측 공간 보간 기법 통합',
+    summary: '커피박 자원순환을 통한 축사 환경 개선 효과를 과학적 연구 데이터와 경제성 지표로 검증한 시뮬레이션입니다.',
+    details: [
+      '복합악취 저감: 커피박 다공성 탄소 구조의 물리화학적 악취 가스 흡착 실증치 반영',
+      '톱밥 비용 절감: 동일 부피 1:1 대체 원리에 기초한 경제적 이익 추정',
+      '공간 악취 분포: 실측 센서 2점 기반의 IDW 보간 알고리즘 시각화',
+      '본 시뮬레이션은 농가의 실제 적용 시 참고할 수 있는 예측 지표를 제공합니다.',
+    ],
+  },
+};
 
 interface BarnSensor {
   name: string;
@@ -40,6 +125,7 @@ interface BarnData {
 export const SimulationView: React.FC = () => {
   const { setActiveTab } = useCompost();
   const { theme, toggleTheme } = useTheme();
+  const [selectedInfoKey, setSelectedInfoKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   /** 처음 그려진 마크업. 아래 효과가 다시 돌 때 항상 이 상태에서 시작한다 */
   const pristineRef = useRef<DocumentFragment | null>(null);
@@ -1446,12 +1532,34 @@ export const SimulationView: React.FC = () => {
       {/* 결과 요약 카드 (Apple 스타일) */}
       <section className="apple-results">
         <div className="apple-section-title">
-          <h3>시뮬레이션 결과</h3>
+          <div className="flex items-center gap-1.5">
+            <h3>시뮬레이션 결과</h3>
+            <button
+              type="button"
+              onClick={() => setSelectedInfoKey('overview')}
+              className="info-btn"
+              title="산출 근거 종합 안내 보기"
+              aria-label="산출 근거 종합 안내 보기"
+            >
+              i
+            </button>
+          </div>
           <span>연구 상대 변화율 기반 참고값</span>
         </div>
         <div className="result-grid">
           <article className="result-card primary">
-            <div className="result-label">예상 악취 변화</div>
+            <div className="result-label flex items-center justify-between">
+              <span>예상 악취 변화</span>
+              <button
+                type="button"
+                onClick={() => setSelectedInfoKey('odor')}
+                className="info-btn"
+                title="예상 악취 변화 근거 자료 보기"
+                aria-label="예상 악취 변화 근거 자료 보기"
+              >
+                i
+              </button>
+            </div>
             <div className="result-value" id="apple-odor">
               —
             </div>
@@ -1460,14 +1568,36 @@ export const SimulationView: React.FC = () => {
             </div>
           </article>
           <article className="result-card">
-            <div className="result-label">예상 톱밥 구매 절감</div>
+            <div className="result-label flex items-center justify-between">
+              <span>예상 톱밥 구매 절감</span>
+              <button
+                type="button"
+                onClick={() => setSelectedInfoKey('saving')}
+                className="info-btn"
+                title="톱밥 구매 절감 근거 자료 보기"
+                aria-label="톱밥 구매 절감 근거 자료 보기"
+              >
+                i
+              </button>
+            </div>
             <div className="result-value" id="apple-saving">
               —
             </div>
             <div className="result-note">동일 부피 대체 가정</div>
           </article>
           <article className="result-card">
-            <div className="result-label">경과</div>
+            <div className="result-label flex items-center justify-between">
+              <span>경과</span>
+              <button
+                type="button"
+                onClick={() => setSelectedInfoKey('cycle')}
+                className="info-btn"
+                title="경과 일수 및 혼합비 근거 자료 보기"
+                aria-label="경과 일수 및 혼합비 근거 자료 보기"
+              >
+                i
+              </button>
+            </div>
             <div className="result-value" id="apple-day">
               0일
             </div>
@@ -1484,19 +1614,52 @@ export const SimulationView: React.FC = () => {
           </div>
           <div className="condition-grid">
             <div className="condition-item">
-              <div className="condition-label">커피박 사용량</div>
+              <div className="condition-label flex items-center justify-between">
+                <span>커피박 사용량</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedInfoKey('mass')}
+                  className="info-btn"
+                  title="커피박 사용량 산출 기준 보기"
+                  aria-label="커피박 사용량 산출 기준 보기"
+                >
+                  i
+                </button>
+              </div>
               <div className="condition-value" id="apple-mass">
                 500 kg
               </div>
             </div>
             <div className="condition-item">
-              <div className="condition-label">축사 크기</div>
+              <div className="condition-label flex items-center justify-between">
+                <span>축사 크기</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedInfoKey('size')}
+                  className="info-btn"
+                  title="축사 규격 산출 기준 보기"
+                  aria-label="축사 규격 산출 기준 보기"
+                >
+                  i
+                </button>
+              </div>
               <div className="condition-value" id="apple-size">
                 30 × 22m
               </div>
             </div>
             <div className="condition-item">
-              <div className="condition-label">센서</div>
+              <div className="condition-label flex items-center justify-between">
+                <span>센서</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedInfoKey('sensor')}
+                  className="info-btn"
+                  title="센서 배치 및 공간 보간 근거 보기"
+                  aria-label="센서 배치 및 공간 보간 근거 보기"
+                >
+                  i
+                </button>
+              </div>
               <div className="condition-value" id="apple-sensors">
                 2개
               </div>
@@ -1504,6 +1667,85 @@ export const SimulationView: React.FC = () => {
           </div>
         </div>
       </section>
+
+      {/* 근거 자료 및 출처 상세 안내 모달 */}
+      {selectedInfoKey && SIMULATION_EVIDENCES[selectedInfoKey] && (
+        <div
+          className="evidence-modal-overlay"
+          onClick={() => setSelectedInfoKey(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="evidence-modal-title"
+        >
+          <div
+            className="evidence-modal-content"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="evidence-modal-header">
+              <div className="evidence-modal-title-wrap">
+                <span className="evidence-badge">
+                  {SIMULATION_EVIDENCES[selectedInfoKey].badge}
+                </span>
+                <h4 id="evidence-modal-title" className="evidence-modal-title">
+                  {SIMULATION_EVIDENCES[selectedInfoKey].title}
+                </h4>
+              </div>
+              <button
+                type="button"
+                className="evidence-close-btn"
+                onClick={() => setSelectedInfoKey(null)}
+                aria-label="닫기"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="evidence-modal-body">
+              <div className="evidence-section">
+                <div className="evidence-section-label">
+                  <span className="evidence-icon">🏛</span> 출처 및 참고 연구
+                </div>
+                <div className="evidence-source-box">
+                  {SIMULATION_EVIDENCES[selectedInfoKey].source}
+                </div>
+              </div>
+
+              <div className="evidence-section">
+                <div className="evidence-section-label">
+                  <span className="evidence-icon">💡</span> 산출 원리 및 개요
+                </div>
+                <p className="evidence-summary-text">
+                  {SIMULATION_EVIDENCES[selectedInfoKey].summary}
+                </p>
+              </div>
+
+              <div className="evidence-section">
+                <div className="evidence-section-label">
+                  <span className="evidence-icon">📋</span> 과학적 근거 및 신빙성 요소
+                </div>
+                <ul className="evidence-detail-list">
+                  {SIMULATION_EVIDENCES[selectedInfoKey].details.map((detail, idx) => (
+                    <li key={idx} className="evidence-detail-item">
+                      <span className="evidence-bullet">•</span>
+                      <span>{detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="evidence-modal-footer">
+              <button
+                type="button"
+                className="evidence-confirm-btn"
+                onClick={() => setSelectedInfoKey(null)}
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
