@@ -605,7 +605,7 @@ html.dark .collection-impact {
 
 .collection-impact__search-icon {
   color: var(--ci-muted);
-  shrink-0: 0;
+  flex-shrink: 0;
 }
 
 .collection-impact__search-input {
