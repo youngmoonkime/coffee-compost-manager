@@ -1,10 +1,7 @@
 import React from 'react';
 import type { PileSummary } from '../../utils/calculations';
 import { formatShortDate } from '../../utils/calculations';
-import { useCompost } from '../../contexts/CompostContext';
-import { useAccess } from '../../contexts/AccessContext';
 import { Card } from '../ui/Card';
-import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
 import { MetricDisplay } from '../ui/MetricDisplay';
 import { MoistureChart } from '../common/MoistureChart';
@@ -16,16 +13,9 @@ interface LocationDetailProps {
 }
 
 export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack }) => {
-  const { setMeasurePile, setActiveTab } = useCompost();
-  const { isManager } = useAccess();
   const { pile, latest, verdict, records, allRecords, measured, lastVisitDate, totalCollectedKg } = summary;
   const previous = records[records.length - 2];
   const diffMoisture = previous ? Number((latest.moisture - previous.moisture).toFixed(1)) : undefined;
-
-  const handleStartMeasurement = () => {
-    setMeasurePile(pile);
-    setActiveTab('monitoring');
-  };
 
   return (
     <div className="flex flex-col w-full space-y-4 pb-8">
@@ -120,18 +110,7 @@ export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack 
         </div>
       </Card>
 
-      {/* 2. 빠른 측정 CTA 버튼 (측정은 회사가 한다) */}
-      {!isManager && (
-      <Button
-        variant="primary"
-        size="lg"
-        icon="edit_note"
-        onClick={handleStartMeasurement}
-        className="shadow-xs"
-      >
-        이 장소 바로 측정하기
-      </Button>
-      )}
+
 
       {/* 3. 함수율 추이 차트 (MoistureChart) */}
       <div className="space-y-2">
