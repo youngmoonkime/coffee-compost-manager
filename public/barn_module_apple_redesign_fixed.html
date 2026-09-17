@@ -1244,11 +1244,7 @@ new ResizeObserver(requestDraw).observe(c);matchMedia('(prefers-color-scheme: da
     document.documentElement.setAttribute('data-embedded', 'true');
   }
 
-  // 2. 헤더 생성 (설정 및 테마변경 아이콘 삭제)
-  const header=document.createElement('header');
-  header.className='apple-header';
-  header.innerHTML=`<div class="apple-header-left"><div class="apple-title-wrap"><div class="apple-title">축사 시뮬레이션</div><div class="apple-subtitle" id="apple-barn-subtitle">현재 축사</div></div></div>`;
-  root.prepend(header);
+  // 2. 상단 중복 헤더 박스는 완전히 제거하여 설정 탭이 잘리지 않도록 함
 
   const result=document.createElement('section');
   result.className='apple-results';
@@ -1266,11 +1262,28 @@ new ResizeObserver(requestDraw).observe(c);matchMedia('(prefers-color-scheme: da
   const calcFactor=()=>{const mix=Number(q('mix')?.value||50),day=Number(q('day')?.value||0);const series={25:[25,82.5,47.5],50:[275,225,85],75:[400,147.5,175]},s=series[mix]||series[50];const v=day<=7?s[0]+(s[1]-s[0])*day/7:s[1]+(s[2]-s[1])*(day-7)/23;return s[0]?v/s[0]:1};
   const updateSummary=()=>{
     const factor=calcFactor(),change=(factor-1)*100,mass=Number(q('mass')?.value||0),density=Math.max(1,Number(q('density')?.value||1)),price=Number(q('price')?.value||0),saving=Math.round(mass/density*price),day=Number(q('day')?.value||0),mix=Number(q('mix')?.value||50),length=Number(q('length')?.value||0),width=Number(q('width')?.value||0),sensorCount=q('sensor-pick')?.options?.length||0;
-    const odor=root.querySelector('#apple-odor');odor.textContent=(change>0?'+':'')+change.toFixed(0)+'%';odor.style.color=change<=0?'var(--brand)':'var(--warn)';
-    root.querySelector('#apple-odor-note').textContent=change<=0?'초기값 대비 예상 감소':'초기값 대비 예상 증가';
-    root.querySelector('#apple-saving').textContent=saving.toLocaleString('ko-KR')+'원';
-    root.querySelector('#apple-day').textContent=day+'일';root.querySelector('#apple-mix-note').textContent='혼합비 '+mix+'%';root.querySelector('#apple-mass').textContent=mass.toLocaleString('ko-KR')+' kg';root.querySelector('#apple-size').textContent=length+' × '+width+'m';root.querySelector('#apple-sensors').textContent=sensorCount+'개';
-    const name=q('select')?.selectedOptions?.[0]?.textContent||q('name')?.value||'현재 축사';root.querySelector('#apple-barn-subtitle').textContent=name;
+    const odor=root.querySelector('#apple-odor');
+    if (odor) {
+      odor.textContent=(change>0?'+':'')+change.toFixed(0)+'%';
+      odor.style.color=change<=0?'var(--brand)':'var(--warn)';
+    }
+    const odorNote=root.querySelector('#apple-odor-note');
+    if (odorNote) odorNote.textContent=change<=0?'초기값 대비 예상 감소':'초기값 대비 예상 증가';
+    const savingEl=root.querySelector('#apple-saving');
+    if (savingEl) savingEl.textContent=saving.toLocaleString('ko-KR')+'원';
+    const dayEl=root.querySelector('#apple-day');
+    if (dayEl) dayEl.textContent=day+'일';
+    const mixNote=root.querySelector('#apple-mix-note');
+    if (mixNote) mixNote.textContent='혼합비 '+mix+'%';
+    const massEl=root.querySelector('#apple-mass');
+    if (massEl) massEl.textContent=mass.toLocaleString('ko-KR')+' kg';
+    const sizeEl=root.querySelector('#apple-size');
+    if (sizeEl) sizeEl.textContent=length+' × '+width+'m';
+    const sensorsEl=root.querySelector('#apple-sensors');
+    if (sensorsEl) sensorsEl.textContent=sensorCount+'개';
+    const name=q('select')?.selectedOptions?.[0]?.textContent||q('name')?.value||'현재 축사';
+    const subTitle=root.querySelector('#apple-barn-subtitle');
+    if (subTitle) subTitle.textContent=name;
   };
   root.addEventListener('input',()=>queueMicrotask(updateSummary));root.addEventListener('change',()=>queueMicrotask(updateSummary));root.addEventListener('click',()=>setTimeout(updateSummary,0));
   const obs=new MutationObserver(updateSummary);if(q('select'))obs.observe(q('select'),{childList:true,subtree:true});
