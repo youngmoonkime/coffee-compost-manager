@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
+import { hasMeasurement } from '../../utils/calculations';
 import type { MeasurementRecord } from '../../types';
 
 const CHART_HEIGHT = 120;
@@ -15,11 +16,13 @@ interface MoistureChartProps {
   variant?: 'card' | 'inline';
 }
 
-/** 한 장소의 함수율 추이 — 깔개 사용 기준 구간을 함께 그린다 */
+/** 한 장소의 함수율 추이 — 현장 관찰 기준 구간을 함께 그린다 */
 export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant = 'card' }) => {
   const { settings } = useCompost();
 
-  const logs = records.slice(-VISIBLE_POINTS);
+  // 현장 점검 기록(측정값 없음)은 그래프에 찍지 않는다
+  const measured = records.filter(hasMeasurement);
+  const logs = measured.slice(-VISIBLE_POINTS);
   const { usableMoistureMin: bandMin, usableMoistureMax: bandMax } = settings;
 
   // viewBox 를 실제 픽셀 폭에 맞춰야 가로·세로 배율이 1:1 이 되어 숫자와 점이 찌그러지지 않는다.
@@ -70,12 +73,12 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
           <h3 className="font-headline-sm text-[14px] font-bold text-on-surface dark:text-[#F5F5F7] tracking-tight whitespace-nowrap">
             함수율 추이
           </h3>
-          {records.length > VISIBLE_POINTS && (
+          {measured.length > VISIBLE_POINTS && (
             <span className="font-caption text-[11px] text-outline dark:text-[#8E8E93] whitespace-nowrap">최근 {VISIBLE_POINTS}회</span>
           )}
         </div>
         <span className="font-caption text-[11px] text-primary dark:text-[#34C759] font-bold whitespace-nowrap">
-          깔개 사용 {bandMin}~{bandMax}%
+          현장 관찰 {bandMin}~{bandMax}%
         </span>
       </div>
 
@@ -92,9 +95,9 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
               viewBox={`0 0 ${Math.max(width, 1)} ${CHART_HEIGHT}`}
               className="block overflow-visible"
               role="img"
-              aria-label={`함수율 추이. 최근 ${logs.length}건. 깔개 사용 기준 ${bandMin}~${bandMax}%.`}
+              aria-label={`함수율 추이. 최근 ${logs.length}건. 현장 관찰 기준 ${bandMin}~${bandMax}%.`}
             >
-              {/* 함수율이 이 점선 구간 안에 들어오면 깔개로 쓸 수 있다 */}
+              {/* 함수율이 이 점선 구간 안에 들어오면 깔개 사용 후보로 본다 */}
               <rect
                 x={innerLeft}
                 y={bandTop}
@@ -121,7 +124,7 @@ export const MoistureChart: React.FC<MoistureChartProps> = ({ records, variant =
                 x={innerLeft + 4}
                 y={bandBottom - 5}
               >
-                이 구간이면 깔개 사용 가능
+                이 구간이면 깔개 사용 후보
               </text>
 
               {polylinePoints && (

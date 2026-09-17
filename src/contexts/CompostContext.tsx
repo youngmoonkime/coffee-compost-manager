@@ -1,6 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { ActiveTab, CompostSettings, CorePoint, GoogleSheetsConfig, MeasurementRecord, Pile, VerdictInfo } from '../types';
-import { DEFAULT_RANCH_NAME, DEFAULT_SETTINGS, SHEET_WEBHOOK_URL } from '../constants/defaultData';
+import type {
+  ActiveTab,
+  CompostSettings,
+  CorePoint,
+  GoogleSheetsConfig,
+  MeasurementRecord,
+  MoldStatus,
+  OperatingCycle,
+  Pile,
+  VerdictInfo,
+} from '../types';
+import { DEFAULT_RANCH_NAME, DEFAULT_SETTINGS, SETTINGS_VERSION, COMPOST_GAS_API_URL } from '../constants/defaultData';
+import { createCycle, resolveCycle } from '../utils/fieldOps';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../utils/storage';
 import {
   annotateRecords,
@@ -22,9 +33,10 @@ import {
   syncRecordsToGoogleSheets,
 } from '../services/googleSheetsService';
 import type { SyncResult } from '../services/googleSheetsService';
+import { useAccess } from './AccessContext';
 
 const DEFAULT_GOOGLE_CONFIG: GoogleSheetsConfig = {
-  sheetWebhookUrl: SHEET_WEBHOOK_URL,
+  sheetWebhookUrl: COMPOST_GAS_API_URL,
   lastSyncStatus: 'idle',
   totalSyncedCount: 0,
 };
@@ -34,16 +46,29 @@ const DEFAULT_GOOGLE_CONFIG: GoogleSheetsConfig = {
  * 예전에 다른 주소를 저장해 둔 기기라면, 그 주소에서 받은 버전·동기화 기록은 새 주소와 무관하므로 비운다.
  */
 function normalizeGoogleConfig(stored: GoogleSheetsConfig): GoogleSheetsConfig {
-  if (stored.sheetWebhookUrl === SHEET_WEBHOOK_URL) return { ...DEFAULT_GOOGLE_CONFIG, ...stored };
+  if (stored.sheetWebhookUrl === COMPOST_GAS_API_URL) return { ...DEFAULT_GOOGLE_CONFIG, ...stored };
   return DEFAULT_GOOGLE_CONFIG;
 }
 
 /** 배치 단위로 저장하던 예전 버전의 로컬 캐시 — 지금 구조와 맞지 않아 지운다 */
 const LEGACY_STORAGE_KEYS = ['batches', 'measurements', 'active_batch_id'];
 
+/** 목장별 숫자 값(목표량·단가) — 숫자가 아닌 값이 섞여 들어와도 화면이 깨지지 않게 걸러낸다 */
+function normalizeTargets(stored: unknown): Record<string, number> {
+  if (!stored || typeof stored !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [ranch, value] of Object.entries(stored as Record<string, unknown>)) {
+    const kg = Number(value);
+    if (ranch.trim() && Number.isFinite(kg) && kg > 0) out[ranch.trim()] = Math.round(kg);
+  }
+  return out;
+}
+
 /** 저장된 설정에 빠지거나 잘못된 항목은 기본값으로 채운다 */
 function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
-  const pick = (key: keyof CompostSettings) => {
+  const pick = (
+    key: 'usableMoistureMin' | 'usableMoistureMax' | 'highMoistureThreshold' | 'highTempThreshold' | 'coreProbeDepthCm' | 'sawdustPricePerTon'
+  ) => {
     const v = Number(stored[key]);
     return Number.isFinite(v) && v > 0 ? v : DEFAULT_SETTINGS[key];
   };
@@ -55,12 +80,23 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
     usableMoistureMax = DEFAULT_SETTINGS.usableMoistureMax;
   }
 
+  // v1 까지의 30~40% 는 앱이 넣어 준 기본값이었다. 현장 관찰값(20~30%)으로 한 번만 맞춘다.
+  const storedVersion = Number(stored.settingsVersion) || 1;
+  if (storedVersion < SETTINGS_VERSION && usableMoistureMin === 30 && usableMoistureMax === 40) {
+    usableMoistureMin = DEFAULT_SETTINGS.usableMoistureMin;
+    usableMoistureMax = DEFAULT_SETTINGS.usableMoistureMax;
+  }
+
   return {
     usableMoistureMin,
     usableMoistureMax,
     highMoistureThreshold: pick('highMoistureThreshold'),
     highTempThreshold: pick('highTempThreshold'),
     coreProbeDepthCm: pick('coreProbeDepthCm'),
+    beddingTargetKg: normalizeTargets(stored.beddingTargetKg),
+    sawdustPricePerTon: pick('sawdustPricePerTon'),
+    sawdustPriceByRanch: normalizeTargets(stored.sawdustPriceByRanch),
+    settingsVersion: SETTINGS_VERSION,
   };
 }
 
@@ -69,12 +105,31 @@ export interface RecordInput {
   location: string;
   date: string;
   time: string;
+  /** 이번 방문에 새로 부은 커피박(kg). 없으면 0 */
   collectedKg: number;
   /** 같은 높이에서 30cm 간격으로 잰 심부 측정값. 평균이 기록의 대푯값이 된다. */
   corePoints: CorePoint[];
   ambientTemp: number;
   ambientHum: number;
   notes?: string;
+  /** 이번 방문에 깔개로 퍼 간 커피박(kg) */
+  beddingUsedKg?: number;
+  /** 깔개 활용 사용처 (예: 1번 우사) */
+  beddingLocation?: string;
+  /** 대략적인 깔개 사용량 표현 (예: 1/2, 2/1 등) */
+  beddingAmountDesc?: string;
+  /** 기록 종류: 현장 점검('inspection') vs 수거·파봉 측정('measurement') */
+  recordType?: 'inspection' | 'measurement';
+  /** 오늘 혼합 작업(기존 커피박을 삽으로 한 번씩 뒤집기)을 했는지 */
+  mixed?: boolean;
+  /** 곰팡이 육안 상태 (현장 점검에서는 필수로 고르게 한다) */
+  moldStatus?: MoldStatus;
+  /** 곰팡이 유무 (현장 점검) */
+  hasMold?: boolean;
+  /** 곰팡이 색상 */
+  moldColor?: string;
+  /** 이상 냄새가 났는지 */
+  odor?: boolean;
   /** 새로 찍은 파봉 작업 사진 (줄인 JPEG data URL) */
   newPhotos?: string[];
 }
@@ -110,6 +165,9 @@ interface CompostContextValue {
   /** 지금 보고 있는 더미 (목장 + 하역 장소) */
   activePile: Pile;
   setActivePile: (pile: Pile) => void;
+  /** 측정 탭이 따로 기억하는 목장·장소 (현장점검 탭과 섞지 않는다) */
+  measurePile: Pile;
+  setMeasurePile: (pile: Pile) => void;
   settings: CompostSettings;
   googleConfig: GoogleSheetsConfig;
   isSyncing: boolean;
@@ -117,9 +175,28 @@ interface CompostContextValue {
   setIsGoogleModalOpen: (open: boolean) => void;
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
+  /** 현장 점검 기록 화면으로 이동 (측정 기록과 별개) */
+  startInspection: () => void;
+  /** 측정 탭에서 고를 수 있는 모든 목장 — 최근에 기록한 곳이 앞 */
+  ranchNames: string[];
+  /** 측정 탭에서 투입 기록이 저장된 목장 — 현장점검 탭에는 이 목장만 보인다 */
+  measuredRanchNames: string[];
+  /** 기록이 아직 없는 새 목장을 목록에 넣는다 */
+  addRanch: (name: string) => string;
+  /** 기록이 없는 목장만 목록에서 지운다. 기록이 있으면 false */
+  removeRanch: (name: string) => boolean;
+  /** 이 목장에 기록이 있어 지울 수 없는지 */
+  ranchHasRecords: (name: string) => boolean;
+  /** 현장점검 탭에서 목장을 골랐는지. 탭 버튼을 다시 누르면 false 로 돌아가 목장부터 고른다. */
+  ranchPicked: boolean;
+  setRanchPicked: (picked: boolean) => void;
   /** 장소별 현황 탭에서 상세를 열어 둔 장소 키. null 이면 장소 목록 */
   historyPileKey: string | null;
   setHistoryPileKey: (key: string | null) => void;
+  /** 목장의 현재 운영 사이클. 기록도 시작 이력도 없으면 null */
+  getCycle: (ranchName: string) => OperatingCycle | null;
+  /** 깔개로 다 쓰고 새로 모으기 시작할 때 누른다 */
+  startNewCycle: (ranchName: string) => OperatingCycle;
   saveRecord: (input: RecordInput) => Promise<SaveRecordResult>;
   /** 기록 삭제 — 시트에서도 제거 */
   deleteRecord: (id: string) => Promise<SyncResult>;
@@ -142,6 +219,8 @@ interface CompostContextValue {
 const CompostContext = createContext<CompostContextValue | null>(null);
 
 export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // 목장 매니저는 자기 목장만 다룬다 (서버도 그 목장 기록만 준다)
+  const { isManager, managerRanch, recheck: recheckAccess } = useAccess();
   const [records, setRecords] = useState<MeasurementRecord[]>(() =>
     getStorageItem<MeasurementRecord[]>('records', [])
   );
@@ -150,6 +229,18 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const saved = getStorageItem<Pile | null>('active_pile', null);
     if (saved?.location) return saved;
     const latest = [...getStorageItem<MeasurementRecord[]>('records', [])].sort(compareRecords).pop();
+    return latest
+      ? { ranchName: latest.ranchName, location: latest.location }
+      : { ranchName: DEFAULT_RANCH_NAME, location: '' };
+  });
+
+  const [measurePile, setMeasurePileState] = useState<Pile>(() => {
+    const saved = getStorageItem<Pile | null>('measure_pile', null);
+    if (saved?.ranchName) return saved;
+    const latest = [...getStorageItem<MeasurementRecord[]>('records', [])]
+      .filter(r => r.recordType !== 'inspection')
+      .sort(compareRecords)
+      .pop();
     return latest
       ? { ranchName: latest.ranchName, location: latest.location }
       : { ranchName: DEFAULT_RANCH_NAME, location: '' };
@@ -168,7 +259,26 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     normalizeGoogleConfig(getStorageItem<GoogleSheetsConfig>('google_config', DEFAULT_GOOGLE_CONFIG))
   );
 
+  /** 목장별로 사람이 시작한 운영 사이클 */
+  const [cycles, setCycles] = useState<Record<string, OperatingCycle>>(() =>
+    getStorageItem<Record<string, OperatingCycle>>('cycles', {})
+  );
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('today');
+
+  const startInspection = useCallback(() => {
+    setActiveTab('inspection');
+  }, []);
+
+  const [ranchPicked, setRanchPicked] = useState(false);
+  /** 사람이 추가한 목장 이름 (기록이 생기기 전에도 목록에 보이도록) */
+  const [savedRanches, setSavedRanches] = useState<string[]>(() => getStorageItem<string[]>('ranch_names', []));
+  const addRanch = useCallback((name: string) => {
+    const ranch = normalizeName(name);
+    if (ranch) setSavedRanches(prev => (prev.includes(ranch) ? prev : [...prev, ranch]));
+    return ranch;
+  }, []);
+
   const [historyPileKey, setHistoryPileKey] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);
@@ -181,8 +291,11 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
   useEffect(() => setStorageItem('records', records), [records]);
   useEffect(() => setStorageItem('active_pile', activePile), [activePile]);
+  useEffect(() => setStorageItem('measure_pile', measurePile), [measurePile]);
   useEffect(() => setStorageItem('pending_record_keys', pendingKeys), [pendingKeys]);
   useEffect(() => setStorageItem('settings', settings), [settings]);
+  useEffect(() => setStorageItem('cycles', cycles), [cycles]);
+  useEffect(() => setStorageItem('ranch_names', savedRanches), [savedRanches]);
   useEffect(() => setStorageItem('google_config', googleConfig), [googleConfig]);
 
   // 시트 새로고침은 앱을 열 때 자동으로 돈다. 콜백이 매번 바뀌지 않도록 최신 값은 ref 로 읽는다.
@@ -205,6 +318,94 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ranchName: normalizeName(pile.ranchName) || DEFAULT_RANCH_NAME,
       location: normalizeName(pile.location),
     });
+  }, []);
+
+  const setMeasurePile = useCallback((pile: Pile) => {
+    setMeasurePileState({
+      ranchName: normalizeName(pile.ranchName) || DEFAULT_RANCH_NAME,
+      location: normalizeName(pile.location),
+    });
+  }, []);
+
+  /**
+   * 목장의 현재 사이클.
+   * 기록에 적힌 사이클 ID 가 먼저다 — 다른 기기에서 시작한 사이클도 시트를 읽으면 그대로 이어진다.
+   */
+  const getCycle = useCallback(
+    (ranchName: string) => resolveCycle(records, ranchName, cycles[normalizeName(ranchName)] ?? null),
+    [records, cycles]
+  );
+
+  /** 기록 → 사람이 추가한 목장 → 목표량·사이클만 있는 목장 → 기본 목장 순 */
+  const ranchNames = useMemo(() => {
+    const byRecent = [...records]
+      .sort((a, b) => compareRecords(b, a))
+      .map(r => normalizeName(r.ranchName));
+    const all = [
+      ...byRecent,
+      ...savedRanches,
+      ...Object.keys(settings.beddingTargetKg ?? {}),
+      ...Object.keys(settings.sawdustPriceByRanch ?? {}),
+      ...Object.keys(cycles),
+    ].map(normalizeName);
+    const list = [...new Set(all.filter(Boolean))];
+    // 아무 목장도 없을 때만 기본 목장을 보여 준다
+    return list.length > 0 ? list : [DEFAULT_RANCH_NAME];
+  }, [records, savedRanches, settings.beddingTargetKg, settings.sawdustPriceByRanch, cycles]);
+
+  const measuredRanchNames = useMemo(() => {
+    const names = [...records]
+      .filter(r => r.recordType !== 'inspection')
+      .sort((a, b) => compareRecords(b, a))
+      .map(r => normalizeName(r.ranchName))
+      .filter(Boolean);
+    return [...new Set(names)];
+  }, [records]);
+
+  const ranchHasRecords = useCallback(
+    (name: string) => {
+      const ranch = normalizeName(name);
+      return records.some(r => normalizeName(r.ranchName) === ranch);
+    },
+    [records]
+  );
+
+  const removeRanch = useCallback(
+    (name: string) => {
+      const ranch = normalizeName(name);
+      if (!ranch || ranchHasRecords(ranch)) return false;
+      setSavedRanches(prev => prev.filter(n => n !== ranch));
+      // 측정 탭이 지운 목장을 마지막 목장으로 기억하고 있으면 비운다
+      setMeasurePileState(prev =>
+        normalizeName(prev.ranchName) === ranch ? { ranchName: DEFAULT_RANCH_NAME, location: '' } : prev
+      );
+      setCycles(prev => {
+        if (!(ranch in prev)) return prev;
+        const next = { ...prev };
+        delete next[ranch];
+        return next;
+      });
+      setSettings(prev => {
+        const hasTarget = ranch in (prev.beddingTargetKg ?? {});
+        const hasPrice = ranch in (prev.sawdustPriceByRanch ?? {});
+        if (!hasTarget && !hasPrice) return prev;
+        const targets = { ...prev.beddingTargetKg };
+        const prices = { ...prev.sawdustPriceByRanch };
+        delete targets[ranch];
+        delete prices[ranch];
+        return { ...prev, beddingTargetKg: targets, sawdustPriceByRanch: prices };
+      });
+      return true;
+    },
+    [ranchHasRecords]
+  );
+
+  /** 깔개로 다 쓰고 새로 모으기 시작할 때. 오늘부터 새 사이클이 된다. */
+  const startNewCycle = useCallback((ranchName: string) => {
+    const name = normalizeName(ranchName) || DEFAULT_RANCH_NAME;
+    const next = createCycle(name);
+    setCycles(prev => ({ ...prev, [name]: next }));
+    return next;
   }, []);
 
   const isSheetBackend = Boolean(googleConfig.sheetWebhookUrl);
@@ -292,6 +493,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     lastLoadStartedRef.current = Date.now();
     try {
       const result = await loadFromGoogleSheets(webhookUrl);
+      if (result.denied) recheckAccess();
 
       if (result.scriptVersion) {
         setGoogleConfig(prev => ({ ...prev, scriptVersion: result.scriptVersion }));
@@ -303,7 +505,10 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const pendingSet = new Set(pendingRef.current);
       // 시트에 없거나, 올리지 못한 사진이 남은 기록만 이 기기 쪽 값을 살려서 다시 보낸다
       const toPush = recordsRef.current.filter(
-        r => pendingSet.has(r.id) && (!sheetIds.has(r.id) || r.pendingPhotoCount)
+        r =>
+          pendingSet.has(r.id) &&
+          (!sheetIds.has(r.id) || r.pendingPhotoCount) &&
+          (!isManager || normalizeName(r.ranchName) === managerRanch)
       );
       const pushIds = new Set(toPush.map(r => r.id));
       const merged = [...result.records.filter(r => !pushIds.has(r.id)), ...toPush];
@@ -337,7 +542,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setIsLoadingFromSheet(false);
     }
-  }, [webhookUrl, markPending, applySyncResult, pushRecord]);
+  }, [webhookUrl, markPending, applySyncResult, pushRecord, recheckAccess, isManager, managerRanch]);
 
   /** 앱을 열면(또는 URL 이 바뀌면) 시트에서 자동으로 불러온다. 실패하면 캐시된 기록을 그대로 쓴다. */
   const hydratedUrlRef = useRef<string | null>(null);
@@ -391,21 +596,73 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // 사진은 드라이브에 올리므로 시트가 연결돼 있을 때만 받는다
     const newPhotos = webhookUrl ? input.newPhotos ?? [] : [];
 
+    /*
+     * 현장 점검과 수거·파봉 측정은 따로 저장하지만 같은 장소·같은 날짜면 한 기록으로 합친다.
+     * 이번에 입력하지 않은 항목은 먼저 저장한 값을 그대로 둔다 —
+     * 점검 뒤에 측정을 저장해도 혼합·곰팡이·악취·깔개 기록이 지워지지 않도록.
+     */
+    const isInspection = input.recordType === 'inspection';
+    const hasCore = input.corePoints.length > 0;
+    const corePoints = hasCore ? input.corePoints : existing?.corePoints ?? [];
     // 지점별로 잰 값의 평균을 기록의 심부 온도·함수율로 쓴다
-    const average = averageCorePoints(input.corePoints);
+    const average = hasCore
+      ? averageCorePoints(input.corePoints)
+      : { coreTemp: existing?.coreTemp ?? 0, moisture: existing?.moisture ?? 0 };
+    const bedding = isInspection || !existing
+      ? input
+      : {
+          beddingUsedKg: existing.beddingUsedKg,
+          beddingLocation: existing.beddingLocation,
+          beddingAmountDesc: existing.beddingAmountDesc,
+        };
+    // 비고는 사람이 적은 특이사항만 — 예전 버전이 자동으로 붙이던 [혼합 작업] 같은 줄은 걸러낸다
+    const noteLines = [
+      ...(existing?.notes?.split('\n') ?? []).filter(
+        line => !/^\[(혼합 작업|곰팡이 관찰|깔개 활용)\]/.test(line.trim())
+      ),
+      ...(input.notes?.split('\n') ?? []),
+    ].map(line => line.trim()).filter(Boolean);
+    const notes = [...new Set(noteLines)].join('\n');
+
+    /*
+     * 이 기록이 속한 운영 사이클.
+     * 예전 기록만 있어 ID 가 없던 더미에는 그 더미의 첫 날로 ID 를 만들어 붙인다 —
+     * 지금 쌓여 있는 커피박과 새 기록이 한 사이클로 이어지게 하기 위해서다.
+     */
+    const resolved = getCycle(pile.ranchName);
+    const cycle: OperatingCycle =
+      resolved?.id ? resolved : createCycle(pile.ranchName, resolved?.startDate ?? input.date);
+    if (!resolved?.id) setCycles(prev => ({ ...prev, [pile.ranchName]: cycle }));
+
+    const addedKg =
+      isInspection && existing
+        ? existing.addedKg ?? existing.collectedKg
+        : Math.max(0, Math.round(input.collectedKg));
 
     const record: MeasurementRecord = {
       id,
       ...pile,
       date: input.date,
       time: input.time,
-      collectedKg: Math.max(0, Math.round(input.collectedKg)),
+      // 예전 '수거량' 칸과 새 '신규 투입량' 칸에 같은 값을 넣는다 (지난 기록도 계속 읽히도록)
+      collectedKg: addedKg,
+      addedKg,
+      beddingUsedKg: Math.max(0, Math.round(bedding.beddingUsedKg ?? 0)) || undefined,
+      beddingLocation: bedding.beddingLocation?.trim() || undefined,
+      beddingAmountDesc: bedding.beddingAmountDesc?.trim() || undefined,
+      recordType: input.recordType || 'measurement',
+      mixed: input.mixed ?? existing?.mixed,
+      moldStatus: input.moldStatus ?? existing?.moldStatus,
+      hasMold: input.hasMold ?? existing?.hasMold,
+      moldColor: isInspection ? input.moldColor?.trim() || undefined : existing?.moldColor,
+      odor: input.odor ?? existing?.odor,
+      cycleId: cycle.id ?? undefined,
       coreTemp: average.coreTemp,
       moisture: average.moisture,
-      corePoints: input.corePoints,
-      ambientTemp: input.ambientTemp,
-      ambientHum: input.ambientHum,
-      notes: input.notes?.trim() || undefined,
+      corePoints,
+      ambientTemp: input.ambientTemp || existing?.ambientTemp || 0,
+      ambientHum: input.ambientHum || existing?.ambientHum || 0,
+      notes: notes || undefined,
       // 같은 날짜를 다시 저장해도 이미 올린 사진·보관 중인 사진은 유지하고 새 사진을 더한다
       photos: existing?.photos,
       pendingPhotoCount: (existing?.pendingPhotoCount ?? 0) + newPhotos.length || undefined,
@@ -420,7 +677,10 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const verdict = evaluateRecord(record, pileRecords.filter(r => r.date < record.date), settings);
 
     setRecords(nextRecords);
-    setActivePile(pile);
+    addRanch(pile.ranchName);
+    // 측정 탭과 현장점검 탭은 각자 고른 목장을 기억한다
+    if (record.recordType === 'inspection') setActivePile(pile);
+    else setMeasurePile(pile);
 
     if (!webhookUrl) {
       return { saved: true, sheet: 'skipped', record, verdict };
@@ -450,9 +710,13 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setIsSyncing(false);
     }
-  }, [records, settings, webhookUrl, setActivePile, pushRecord, markPending]);
+  }, [records, settings, webhookUrl, setActivePile, setMeasurePile, addRanch, pushRecord, markPending, getCycle]);
 
   const deleteRecord = useCallback(async (id: string): Promise<SyncResult> => {
+    // 기록 삭제는 회사 관리자만 (서버도 막는다 — 여기서 먼저 막아 기기 기록만 지워지는 일을 없앤다)
+    if (isManager) {
+      return { success: false, verified: true, message: '기록 삭제는 회사 관리자만 할 수 있습니다.' };
+    }
     const target = records.find(r => r.id === id);
     if (!target) {
       return { success: false, verified: true, message: '삭제할 기록을 찾지 못했습니다.' };
@@ -477,7 +741,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     return result;
-  }, [records, settings, webhookUrl, applySyncResult, markPending]);
+  }, [records, settings, webhookUrl, applySyncResult, markPending, isManager]);
 
   /** 앱의 모든 기록을 시트와 일치시킨다 */
   const syncAllToGoogleSheets = useCallback(async () => {
@@ -510,10 +774,14 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [webhookUrl, records, settings, pushRecord]);
 
   const resetAllData = useCallback(async (): Promise<SyncResult> => {
+    if (isManager) {
+      return { success: false, verified: true, message: '전체 초기화는 회사 관리자만 할 수 있습니다.' };
+    }
     setRecords([]);
     setPendingKeys([]);
     clearPendingPhotos().catch(() => {});
     setActivePileState({ ranchName: DEFAULT_RANCH_NAME, location: '' });
+    setMeasurePileState({ ranchName: DEFAULT_RANCH_NAME, location: '' });
 
     if (!webhookUrl) {
       return { success: true, verified: true, message: '앱의 기록을 모두 삭제했습니다.' };
@@ -522,7 +790,7 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const result = await clearAllFromGoogleSheets(webhookUrl);
     applySyncResult(result, 0);
     return result;
-  }, [webhookUrl, applySyncResult]);
+  }, [webhookUrl, applySyncResult, isManager]);
 
   const updateSettings = useCallback((newSettings: Partial<CompostSettings>) => {
     setSettings(prev => normalizeSettings({ ...prev, ...newSettings }));
@@ -530,15 +798,46 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const updateGoogleConfig = useCallback((newConfig: Partial<GoogleSheetsConfig>) => {
     // 주소는 고정 — 화면에서 무엇을 넘겨도 바뀌지 않는다
-    setGoogleConfig(prev => ({ ...prev, ...newConfig, sheetWebhookUrl: SHEET_WEBHOOK_URL }));
+    setGoogleConfig(prev => ({ ...prev, ...newConfig, sheetWebhookUrl: COMPOST_GAS_API_URL }));
   }, []);
+
+  // 목장 매니저에게 보이는 기록·목장 — 같은 기기에서 관리자로 쓰던 다른 목장 기록이 남아 있어도 보이지 않게
+  const visibleRecords = useMemo(
+    () => (isManager ? records.filter(r => normalizeName(r.ranchName) === managerRanch) : records),
+    [records, isManager, managerRanch]
+  );
+  const visibleRanchNames = useMemo(
+    () => (isManager && managerRanch ? [managerRanch] : ranchNames),
+    [isManager, managerRanch, ranchNames]
+  );
+  const visibleMeasuredRanchNames = useMemo(
+    () => (isManager && managerRanch ? measuredRanchNames.filter(name => name === managerRanch) : measuredRanchNames),
+    [isManager, managerRanch, measuredRanchNames]
+  );
+  const visiblePendingCount = useMemo(() => {
+    if (!isManager) return pendingKeys.length;
+    const ids = new Set(visibleRecords.map(r => r.id));
+    return pendingKeys.filter(key => ids.has(key)).length;
+  }, [isManager, pendingKeys, visibleRecords]);
+
+  // 매니저의 현장점검은 늘 자기 목장
+  useEffect(() => {
+    if (!isManager || !managerRanch || normalizeName(activePile.ranchName) === managerRanch) return;
+    const latest = [...records]
+      .filter(r => normalizeName(r.ranchName) === managerRanch)
+      .sort(compareRecords)
+      .pop();
+    setActivePile({ ranchName: managerRanch, location: latest?.location ?? '' });
+  }, [isManager, managerRanch, activePile.ranchName, records, setActivePile]);
 
   // 컨텍스트 값을 메모이즈해야 Provider 리렌더마다 모든 소비자가 재렌더되는 것을 막을 수 있다.
   const value = useMemo<CompostContextValue>(
     () => ({
-      records,
+      records: visibleRecords,
       activePile,
       setActivePile,
+      measurePile,
+      setMeasurePile,
       settings,
       googleConfig,
       isSyncing,
@@ -546,37 +845,60 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setIsGoogleModalOpen,
       activeTab,
       setActiveTab,
+      startInspection,
+      ranchNames: visibleRanchNames,
+      measuredRanchNames: visibleMeasuredRanchNames,
+      addRanch,
+      removeRanch,
+      ranchHasRecords,
+      // 매니저는 목장을 고를 필요가 없다
+      ranchPicked: isManager ? true : ranchPicked,
+      setRanchPicked,
       historyPileKey,
       setHistoryPileKey,
+      getCycle,
+      startNewCycle,
       saveRecord,
       deleteRecord,
       reloadFromSheet,
       isLoadingFromSheet,
       lastSheetLoadAt,
       isSheetBackend,
-      pendingCount: pendingKeys.length,
+      pendingCount: visiblePendingCount,
       updateSettings,
       updateGoogleConfig,
       syncAllToGoogleSheets,
       resetAllData,
     }),
     [
-      records,
+      visibleRecords,
       activePile,
       setActivePile,
+      measurePile,
+      setMeasurePile,
       settings,
       googleConfig,
       isSyncing,
       isGoogleModalOpen,
       activeTab,
+      startInspection,
+      visibleRanchNames,
+      visibleMeasuredRanchNames,
+      addRanch,
+      removeRanch,
+      ranchHasRecords,
+      isManager,
+      ranchPicked,
       historyPileKey,
+      getCycle,
+      startNewCycle,
       saveRecord,
       deleteRecord,
       reloadFromSheet,
       isLoadingFromSheet,
       lastSheetLoadAt,
       isSheetBackend,
-      pendingKeys.length,
+      visiblePendingCount,
       updateSettings,
       updateGoogleConfig,
       syncAllToGoogleSheets,

@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import type { SaveRecordResult } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
+import { useAccess } from '../../contexts/AccessContext';
 import { DEFAULT_RANCH_NAME } from '../../constants/defaultData';
 import {
   averageCorePoints,
@@ -9,19 +10,19 @@ import {
   getCurrentDateString,
   getCurrentTimeString,
   getPileRecords,
-  getWeeklyCollection,
   CORE_POINT_COUNT,
   normalizeName,
 } from '../../utils/calculations';
+import { summarizeCycle } from '../../utils/fieldOps';
 import { compressImage, MAX_PHOTOS_PER_RECORD } from '../../utils/photos';
-import type { CorePoint, MeasurementRecord, VerdictInfo } from '../../types';
+import type { CorePoint, MeasurementRecord, MoldStatus, VerdictInfo } from '../../types';
 
 import { StepIndicator } from './StepIndicator';
 import { LocationStep } from './steps/LocationStep';
-import { CollectionAmountStep } from './steps/CollectionAmountStep';
+import { FieldWorkStep } from './steps/FieldWorkStep';
+import { CollectionInputStep } from './steps/CollectionInputStep';
 import { CoreMeasurementStep } from './steps/CoreMeasurementStep';
 import type { PointState } from './steps/CoreMeasurementStep';
-import { EnvironmentStep } from './steps/EnvironmentStep';
 import { PhotoStep } from './steps/PhotoStep';
 import { ReviewStep } from './steps/ReviewStep';
 import { MeasurementResult } from './MeasurementResult';
@@ -31,17 +32,23 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
 const MAX_LOCATION_CHIPS = 6;
 
-const STEPS = [
-  { id: 'place', title: '하역 장소 선택', subtitle: '커피박을 하역한 목장과 장소, 측정 일시를 확인하세요.' },
-  { id: 'amount', title: '커피박 수거량', subtitle: '이번에 반입·하역한 커피박의 무게를 입력하세요.' },
-  { id: 'core', title: '심부 온도 및 함수율', subtitle: '동일 높이에서 30cm 간격으로 3곳의 수치를 측정합니다.' },
-  { id: 'ambient', title: '외기 온도 및 습도', subtitle: '현재 농장 외부 기상 상태를 입력하세요.' },
-  { id: 'photo', title: '현장 사진 첨부', subtitle: '파봉 작업 및 더미 상태 사진을 첨부할 수 있습니다.' },
-  { id: 'review', title: '기록 확인 및 저장', subtitle: '입력 내용을 확인하고 특이사항이 있다면 기록하세요.' },
+/** 1. 현장 점검 플로우 스텝 (점검 장소와 일시 → 현장 상태 점검 → 점검 내용 확인) */
+const INSPECTION_STEPS = [
+  { id: 'place', title: '점검 장소와 일시', subtitle: '오늘 둘러본 목장과 장소, 점검 일시를 확인하세요.' },
+  { id: 'work', title: '현장 상태 점검', subtitle: '혼합 유무, 곰팡이 발생 여부(색상/사진), 이상 악취, 깔개 활용을 점검합니다.' },
+  { id: 'review', title: '점검 내용 확인', subtitle: '오늘 점검한 내용을 확인하고 기록을 저장하세요.' },
 ] as const;
 
-type StepId = (typeof STEPS)[number]['id'];
-const LAST_STEP = STEPS.length - 1;
+/** 2. 수거 및 파봉 측정 플로우 스텝 (수거 투입량, 심부 3지점 측정, 파봉 사진) */
+const MEASUREMENT_STEPS = [
+  { id: 'place', title: '수거 장소와 일시', subtitle: '커피박을 하역한 목장과 장소, 작업 일시를 확인하세요.' },
+  { id: 'input', title: '신규 커피박 수거량', subtitle: '오늘 새로 수거하여 더미에 부은 커피박 양(kg)을 입력하세요.' },
+  { id: 'core', title: '심부 온도 및 함수율', subtitle: '동일 높이에서 30cm 간격으로 3곳의 수치를 측정합니다.' },
+  { id: 'photo', title: '파봉 작업 사진 첨부', subtitle: '파봉 작업 현장 사진을 첨부할 수 있습니다.' },
+  { id: 'review', title: '측정 내용 확인', subtitle: '오늘 측정한 내용을 확인하고 기록을 저장하세요.' },
+] as const;
+
+type StepId = 'place' | 'work' | 'input' | 'core' | 'photo' | 'review';
 
 function parseValue(raw: string): number | null {
   const trimmed = raw.trim();
@@ -58,28 +65,61 @@ interface SaveOutcome {
   photosPending: number;
 }
 
-export const MeasurementFlow: React.FC = () => {
+export type FlowMode = 'inspection' | 'measurement';
+
+interface MeasurementFlowProps {
+  /** 'inspection' = 현장 점검 기록, 'measurement' = 수거·파봉 측정 기록 */
+  mode: FlowMode;
+}
+
+export const MeasurementFlow: React.FC<MeasurementFlowProps> = ({ mode: flowMode }) => {
   const {
     records,
+    settings,
     activePile,
     setActivePile,
+    measurePile,
+    setMeasurePile,
+    ranchNames,
+    measuredRanchNames,
+    removeRanch,
+    ranchHasRecords,
+    getCycle,
     saveRecord,
     isSyncing,
     setActiveTab,
     setHistoryPileKey,
   } = useCompost();
   const { showToast } = useToast();
+  const { isManager } = useAccess();
 
-  const [ranchName, setRanchName] = useState(activePile.ranchName || DEFAULT_RANCH_NAME);
-  const [location, setLocation] = useState(activePile.location);
+  // 측정 탭은 현장점검 탭과 따로 목장·장소를 기억한다
+  const basePile = flowMode === 'measurement' ? measurePile : activePile;
+  const setBasePile = flowMode === 'measurement' ? setMeasurePile : setActivePile;
+
+  const [ranchName, setRanchName] = useState(basePile.ranchName || DEFAULT_RANCH_NAME);
+  const [location, setLocation] = useState(basePile.location);
   const [date, setDate] = useState(getCurrentDateString);
   const [time, setTime] = useState(getCurrentTimeString);
-  const [collectedRaw, setCollectedRaw] = useState('');
+
+  // 현장 점검 항목 상태
+  const [mixed, setMixed] = useState<boolean | null>(null);
+  const [hasMold, setHasMold] = useState<boolean | null>(null);
+  const [moldColor, setMoldColor] = useState('');
+  const [moldPhotos, setMoldPhotos] = useState<string[]>([]);
+  const [odor, setOdor] = useState<boolean | null>(null);
+
+  // 깔개 활용 항목 상태
+  const [hasBedding, setHasBedding] = useState<boolean | null>(null);
+  const [beddingRaw, setBeddingRaw] = useState('');
+  const [beddingLocation, setBeddingLocation] = useState('');
+  const [beddingAmountDesc, setBeddingAmountDesc] = useState('');
+
+  // 수거 및 파봉 측정 항목 상태
+  const [addedRaw, setAddedRaw] = useState('');
   const [corePointsRaw, setCorePointsRaw] = useState(() =>
     Array.from({ length: CORE_POINT_COUNT }, () => ({ temp: '', moisture: '' }))
   );
-  const [ambientTempRaw, setAmbientTempRaw] = useState('');
-  const [ambientHumRaw, setAmbientHumRaw] = useState('');
   const [notes, setNotes] = useState('');
   const [photoDrafts, setPhotoDrafts] = useState<string[]>([]);
   const [isPreparingPhotos, setIsPreparingPhotos] = useState(false);
@@ -88,7 +128,11 @@ export const MeasurementFlow: React.FC = () => {
   const [direction, setDirection] = useState<'forward' | 'backward'>('forward');
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
 
-  const collectedKg = parseValue(collectedRaw);
+  const steps = flowMode === 'inspection' ? INSPECTION_STEPS : MEASUREMENT_STEPS;
+  const lastStep = steps.length - 1;
+
+  const addedKg = parseValue(addedRaw);
+  const beddingUsedKg = hasBedding ? parseValue(beddingRaw) : 0;
 
   const parsedPoints: (CorePoint | null)[] = corePointsRaw.map(p => {
     const coreTemp = parseValue(p.temp);
@@ -102,8 +146,6 @@ export const MeasurementFlow: React.FC = () => {
   const moisture = allPointsFilled ? average!.moisture : null;
 
   const pointInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const ambientTemp = parseValue(ambientTempRaw);
-  const ambientHum = parseValue(ambientHumRaw);
 
   const today = getCurrentDateString();
   const pile = useMemo(
@@ -143,10 +185,30 @@ export const MeasurementFlow: React.FC = () => {
     }
   };
 
-  const knownRanches = useMemo(() => {
-    const names = new Set([DEFAULT_RANCH_NAME, ...records.map(r => r.ranchName)]);
-    return [...names];
-  }, [records]);
+  /** 기록이 없는 목장만 목록에서 지운다 */
+  const deleteRanch = (name: string) => {
+    if (!window.confirm(`'${name}' 목장을 목록에서 삭제할까요?`)) return;
+    if (!removeRanch(name)) {
+      showToast('삭제할 수 없습니다', '기록이 있는 목장은 삭제할 수 없습니다.', 'warning');
+      return;
+    }
+    if (normalizeName(name) === normalizeName(ranchName)) {
+      setRanchName('');
+      setLocation('');
+    }
+    showToast('목장을 삭제했습니다', name, 'success');
+  };
+
+  /** 목장을 바꾸면 그 목장에서 마지막으로 쓴 장소를 채운다 */
+  const selectRanch = (name: string) => {
+    if (normalizeName(name) === normalizeName(ranchName)) return;
+    const latest = records
+      .filter(r => normalizeName(r.ranchName) === normalizeName(name))
+      .sort(compareRecords)
+      .pop();
+    setRanchName(name);
+    setLocation(latest?.location ?? '');
+  };
 
   const recentLocations = useMemo(() => {
     const seen = new Set<string>();
@@ -154,13 +216,21 @@ export const MeasurementFlow: React.FC = () => {
       .filter(r => r.ranchName === pile.ranchName)
       .sort((a, b) => compareRecords(b, a))
       .map(r => r.location)
-      .filter(loc => loc && !seen.has(loc) && seen.add(loc))
+      .filter(l => l && !seen.has(l) && seen.add(l))
       .slice(0, MAX_LOCATION_CHIPS);
   }, [records, pile.ranchName]);
 
-  const weekly = useMemo(() => {
-    return getWeeklyCollection(records, DATE_RE.test(date) ? date : today);
-  }, [records, date, today]);
+  const cycleStatus = useMemo(
+    () =>
+      summarizeCycle({
+        records,
+        ranchName: pile.ranchName,
+        settings,
+        cycle: getCycle(pile.ranchName),
+        today,
+      }),
+    [records, pile.ranchName, settings, getCycle, today]
+  );
 
   const setPointValue = (index: number, key: 'temp' | 'moisture', value: string) =>
     setCorePointsRaw(prev => prev.map((p, i) => (i === index ? { ...p, [key]: value } : p)));
@@ -178,31 +248,40 @@ export const MeasurementFlow: React.FC = () => {
         if (!DATE_RE.test(date) || !TIME_RE.test(time)) return '측정 일시를 확인해주세요';
         if (date > today) return '미래 날짜는 기록할 수 없습니다';
         return null;
-      case 'amount':
-        if (collectedKg === null) return '수거량을 입력해주세요 (없으면 0)';
-        if (collectedKg < 0) return '0 이상으로 입력해주세요';
+
+      case 'work':
+        if (mixed === null) return '오늘 혼합 작업 여부를 골라주세요';
+        if (hasMold === null) return '곰팡이 발생 여부를 골라주세요';
+        if (hasMold && !moldColor.trim()) return '곰팡이 색상을 선택하거나 입력해주세요';
+        if (odor === null) return '이상 악취 여부를 골라주세요';
+        if (hasBedding === null) return '깔개 활용 여부를 골라주세요';
+        if (hasBedding && !beddingLocation.trim()) return '깔개 사용처(예: 1번 우사 등)를 입력해주세요';
+        if (hasBedding && (beddingUsedKg === null || beddingUsedKg <= 0)) return '깔개 사용량(kg 또는 1/2 등)을 입력해주세요';
         return null;
+
+      case 'input':
+        if (addedKg === null || addedKg <= 0) return '신규 수거/투입량을 입력해주세요';
+        return null;
+
       case 'core':
         if (!allPointsFilled) return `${CORE_POINT_COUNT}지점 값을 모두 입력해주세요`;
         if (filledPoints.some(p => p.moisture < 0 || p.moisture > 100)) return '함수율은 0~100% 사이입니다';
         return null;
-      case 'ambient':
-        if (ambientTemp === null || ambientHum === null) return '외기 온도와 습도를 모두 입력해주세요';
-        if (ambientHum < 0 || ambientHum > 100) return '습도는 0~100% 사이입니다';
-        return null;
+
       case 'photo':
         return isPreparingPhotos ? '사진 준비 중…' : null;
+
       case 'review':
         return null;
     }
   };
 
-  const step = STEPS[stepIndex];
-  const stepIssue = issueOf(step.id);
+  const step = steps[stepIndex];
+  const stepIssue = issueOf(step.id as StepId);
 
   const goNext = () => {
-    if (stepIndex >= LAST_STEP || stepIssue) return;
-    if (step.id === 'place') setActivePile(pile);
+    if (stepIndex >= lastStep || stepIssue) return;
+    if (step.id === 'place') setBasePile(pile);
     setDirection('forward');
     setStepIndex(stepIndex + 1);
   };
@@ -213,14 +292,21 @@ export const MeasurementFlow: React.FC = () => {
   };
 
   const resetForm = () => {
-    setRanchName(activePile.ranchName || DEFAULT_RANCH_NAME);
-    setLocation(activePile.location);
+    setRanchName(basePile.ranchName || DEFAULT_RANCH_NAME);
+    setLocation(basePile.location);
     setDate(getCurrentDateString());
     setTime(getCurrentTimeString());
-    setCollectedRaw('');
+    setMixed(null);
+    setHasMold(null);
+    setMoldColor('');
+    setMoldPhotos([]);
+    setOdor(null);
+    setHasBedding(null);
+    setBeddingRaw('');
+    setBeddingLocation('');
+    setBeddingAmountDesc('');
+    setAddedRaw('');
     setCorePointsRaw(Array.from({ length: CORE_POINT_COUNT }, () => ({ temp: '', moisture: '' })));
-    setAmbientTempRaw('');
-    setAmbientHumRaw('');
     setNotes('');
     setPhotoDrafts([]);
     setOutcome(null);
@@ -228,24 +314,40 @@ export const MeasurementFlow: React.FC = () => {
     setStepIndex(0);
   };
 
-
   const handleSave = async () => {
-    const firstIssue = STEPS.map(s => issueOf(s.id)).find(Boolean);
-    if (firstIssue || collectedKg === null || !allPointsFilled || ambientTemp === null || ambientHum === null) {
-      showToast('입력이 완료되지 않았습니다', firstIssue ?? '비어 있는 항목을 채워주세요', 'warning');
+    const firstIssue = steps.map(s => issueOf(s.id as StepId)).find(Boolean);
+    if (firstIssue) {
+      showToast('입력이 완료되지 않았습니다', firstIssue, 'warning');
       return;
     }
+
+    // 곰팡이 육안 상태 산출
+    const moldStatusCalc: MoldStatus | undefined =
+      hasMold === false ? 'none' : hasMold === true ? 'some' : undefined;
+
+    // 합쳐서 업로드할 사진 (파봉 사진 + 곰팡이 사진)
+    const combinedPhotos = [...photoDrafts, ...moldPhotos].slice(0, MAX_PHOTOS_PER_RECORD);
 
     const result = await saveRecord({
       ...pile,
       date,
       time,
-      collectedKg,
-      corePoints: filledPoints,
-      ambientTemp,
-      ambientHum,
-      notes,
-      newPhotos: photoDrafts,
+      collectedKg: flowMode === 'measurement' ? (addedKg ?? 0) : 0,
+      beddingUsedKg: beddingUsedKg ?? 0,
+      beddingLocation: hasBedding ? beddingLocation.trim() : undefined,
+      beddingAmountDesc: hasBedding ? beddingAmountDesc : undefined,
+      recordType: flowMode,
+      mixed: mixed ?? undefined,
+      moldStatus: moldStatusCalc,
+      hasMold: hasMold ?? undefined,
+      moldColor: moldColor.trim() || undefined,
+      odor: odor ?? undefined,
+      corePoints: flowMode === 'inspection' ? [] : filledPoints,
+      ambientTemp: 0,
+      ambientHum: 0,
+      // 시트 '비고' 칸에는 확인 단계에서 적은 특이사항만 들어간다
+      notes: notes.trim() || undefined,
+      newPhotos: combinedPhotos,
     });
 
     if (!result.saved || !result.record || !result.verdict) {
@@ -278,10 +380,15 @@ export const MeasurementFlow: React.FC = () => {
         photosUploaded={outcome.photosUploaded}
         photosPending={outcome.photosPending}
         previousRecord={previous}
+        mode={flowMode}
         onMeasureAnother={resetForm}
         onViewLocationDetail={() => {
-          setHistoryPileKey(`${outcome.record.ranchName}|${outcome.record.location}`);
-          setActiveTab('history');
+          if (isManager || flowMode === 'inspection') {
+            setActiveTab('today');
+          } else {
+            setHistoryPileKey(`${outcome.record.ranchName}|${outcome.record.location}`);
+            setActiveTab('history');
+          }
         }}
       />
     );
@@ -289,10 +396,10 @@ export const MeasurementFlow: React.FC = () => {
 
   return (
     <div className="flex flex-col w-full max-w-xl mx-auto pb-8">
-      {/* 1. 상단 인디케이터 */}
+      {/* 1. 상단 스텝 인디케이터 */}
       <StepIndicator
         currentStep={stepIndex}
-        totalSteps={STEPS.length}
+        totalSteps={steps.length}
         title={step.title}
         subtitle={step.subtitle}
       />
@@ -304,7 +411,6 @@ export const MeasurementFlow: React.FC = () => {
           direction === 'forward' ? 'step-enter-forward' : 'step-enter-backward'
         }`}
       >
-
         {step.id === 'place' && (
           <LocationStep
             ranchName={ranchName}
@@ -316,21 +422,53 @@ export const MeasurementFlow: React.FC = () => {
             time={time}
             setTime={setTime}
             today={today}
-            knownRanches={knownRanches}
+            knownRanches={flowMode === 'measurement' ? ranchNames : measuredRanchNames}
+            onSelectRanch={selectRanch}
+            ranchLocked={isManager}
+            canDeleteRanch={flowMode === 'measurement' ? name => !ranchHasRecords(name) : undefined}
+            onDeleteRanch={flowMode === 'measurement' ? deleteRanch : undefined}
             recentLocations={recentLocations}
             onEnterNext={goNext}
           />
         )}
 
-        {step.id === 'amount' && (
-          <CollectionAmountStep
-            collectedRaw={collectedRaw}
-            setCollectedRaw={setCollectedRaw}
-            weekly={weekly}
+        {/* 현장 점검 모드: 혼합, 곰팡이 유무/색상/사진, 냄새, 깔개 */}
+        {step.id === 'work' && (
+          <FieldWorkStep
+            mixed={mixed}
+            setMixed={setMixed}
+            hasMold={hasMold}
+            setHasMold={setHasMold}
+            moldColor={moldColor}
+            setMoldColor={setMoldColor}
+            moldPhotos={moldPhotos}
+            setMoldPhotos={setMoldPhotos}
+            odor={odor}
+            setOdor={setOdor}
+            hasBedding={hasBedding}
+            setHasBedding={setHasBedding}
+            beddingRaw={beddingRaw}
+            setBeddingRaw={setBeddingRaw}
+            beddingLocation={beddingLocation}
+            setBeddingLocation={setBeddingLocation}
+            beddingAmountDesc={beddingAmountDesc}
+            setBeddingAmountDesc={setBeddingAmountDesc}
+            currentPileKg={cycleStatus.currentPileKg}
             onEnterNext={goNext}
           />
         )}
 
+        {/* 수거·파봉 측정 모드: 신규 수거량 입력 */}
+        {step.id === 'input' && (
+          <CollectionInputStep
+            addedRaw={addedRaw}
+            setAddedRaw={setAddedRaw}
+            currentPileKg={cycleStatus.currentPileKg}
+            onEnterNext={goNext}
+          />
+        )}
+
+        {/* 심부 3지점 측정 (현장 점검·수거·파봉 측정 공통) */}
         {step.id === 'core' && (
           <CoreMeasurementStep
             corePointsRaw={corePointsRaw}
@@ -343,16 +481,7 @@ export const MeasurementFlow: React.FC = () => {
           />
         )}
 
-        {step.id === 'ambient' && (
-          <EnvironmentStep
-            ambientTempRaw={ambientTempRaw}
-            setAmbientTempRaw={setAmbientTempRaw}
-            ambientHumRaw={ambientHumRaw}
-            setAmbientHumRaw={setAmbientHumRaw}
-            onEnterNext={goNext}
-          />
-        )}
-
+        {/* 수거·파봉 측정 모드: 파봉 작업 사진 */}
         {step.id === 'photo' && (
           <PhotoStep
             photoDrafts={photoDrafts}
@@ -363,70 +492,76 @@ export const MeasurementFlow: React.FC = () => {
           />
         )}
 
+        {/* 확인 및 저장 단계 */}
         {step.id === 'review' && (
           <ReviewStep
-            ranchName={ranchName}
-            location={location}
+            mode={flowMode}
+            ranchName={pile.ranchName}
+            location={pile.location}
             date={date}
             time={time}
-            collectedKg={collectedKg}
+            mixed={mixed}
+            collectedKg={flowMode === 'measurement' ? addedKg : null}
+            beddingUsedKg={hasBedding ? beddingUsedKg : null}
             coreTemp={coreTemp}
             moisture={moisture}
-            ambientTemp={ambientTemp}
-            ambientHum={ambientHum}
-            photoCount={photoDrafts.length}
+            moldStatus={hasMold ? 'some' : hasMold === false ? 'none' : null}
+            odor={odor}
+            ambientTemp={null}
+            ambientHum={null}
+            photoCount={photoDrafts.length + moldPhotos.length}
             notes={notes}
             setNotes={setNotes}
           />
         )}
       </div>
 
-      {/* 단계별 이슈 에러 메시지 */}
-      {stepIssue && (
-        <div className="mb-4 text-xs font-semibold text-[#D97706] bg-[#FF9F0A]/10 px-3.5 py-2 rounded-xl flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[16px]">info</span>
-          <span>{stepIssue}</span>
-        </div>
-      )}
-
-      {/* 3. 하단 액션 버튼 바 (Primary 계속/저장 & Secondary 이전) */}
-      <div className="flex items-center gap-2.5 pt-1">
-        {stepIndex > 0 && (
+      {/* 3. 하단 네비게이션 버튼 (이전 / 다음 / 저장) */}
+      <div className="flex gap-2 items-center">
+        {stepIndex > 0 ? (
           <Button
-            type="button"
             variant="secondary"
             size="lg"
-            icon="chevron_left"
+            icon="arrow_back"
             onClick={goBack}
-            className="w-20 sm:w-24 shrink-0 text-xs sm:text-sm font-medium text-[#6E6E73] dark:text-[#8E8E93] !bg-[#E5E5EA]/80 dark:!bg-[#2C2C2E] hover:!bg-[#D1D1D6] dark:hover:!bg-[#3A3A3C] border border-black/5 dark:border-white/5"
+            className="w-20 sm:w-24 shrink-0 !px-2 text-sm"
           >
             이전
           </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            size="lg"
+            icon="close"
+            // 측정 탭은 현장점검과 별개라 다른 탭으로 보내지 않고 입력만 비운다
+            onClick={flowMode === 'measurement' ? resetForm : () => setActiveTab('today')}
+            className="w-20 sm:w-24 shrink-0 !px-2 text-sm"
+          >
+            {flowMode === 'measurement' ? '초기화' : '취소'}
+          </Button>
         )}
 
-        {stepIndex < LAST_STEP ? (
+        {stepIndex < lastStep ? (
           <Button
-            type="button"
             variant="primary"
             size="lg"
             iconRight="arrow_forward"
-            disabled={Boolean(stepIssue)}
             onClick={goNext}
-            className="flex-1 text-[16px] sm:text-[17px] font-bold tracking-tight shadow-md"
+            disabled={Boolean(stepIssue)}
+            className="flex-1"
           >
-            {stepIssue ? '입력 확인 필요' : step.id === 'photo' && photoDrafts.length === 0 ? '사진 없이 계속' : '계속'}
+            다음
           </Button>
         ) : (
           <Button
-            type="button"
             variant="primary"
             size="lg"
-            icon="cloud_upload"
-            disabled={Boolean(stepIssue) || isSyncing}
+            icon="check"
             onClick={handleSave}
-            className="flex-1 text-[16px] sm:text-[17px] font-bold tracking-tight shadow-md"
+            disabled={isSyncing}
+            className="flex-1"
           >
-            {isSyncing ? '저장 중…' : '기록 저장하기'}
+            {isSyncing ? '저장 중…' : flowMode === 'inspection' ? '점검 완료 및 저장' : '측정 완료 및 저장'}
           </Button>
         )}
       </div>

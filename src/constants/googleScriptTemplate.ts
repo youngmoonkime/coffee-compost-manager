@@ -4,7 +4,7 @@
 
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
- * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v11)
+ * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v20)
  * =========================================================================
  * [간편 설정 방법]
  * 1. 구글 스프레드시트 새 문서(sheets.new)를 만듭니다. (기존 시트를 계속 써도 됩니다)
@@ -13,18 +13,77 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * 4. ★사진 권한★ 위쪽 함수 선택 칸에서 "setupPhotoFolder" 를 고르고 [실행]
  *    → [권한 검토] → 계정 선택 → (확인되지 않은 앱 경고가 나오면) [고급] → [이동] → [허용]
  *    (v7 에서 이미 허용했다면 건너뛰어도 됩니다)
+ * 4-1. ★AI 권한★ 함수 선택 칸에서 "setupAiAccess" 를 고르고 [실행] → 같은 방법으로 [허용]
+ *    (AI 리포트·설명이 Gemini 를 부르려면 "외부 서비스 연결" 권한이 필요합니다)
  * 5. 배포
  *    - 처음이면: [배포] > [새 배포] > 유형 [웹 앱]
  *        다음 사용자로 실행: [나]  /  액세스 권한이 있는 사용자: [모든 사용자]  ★필수★
  *    - 이미 배포했다면: [배포] > [배포 관리] > 연필(수정) > 버전 [새 버전] > [배포]
  *      (이렇게 해야 웹 앱 URL 이 바뀌지 않습니다)
  *
+ * [v20 변경점] 현장 점검은 점검 칸에만 기록
+ * - 현장 점검(목장 매니저 포함)은 측정 칸(수거량·심부 온도·함수율·외기·직전 대비·판정·3지점·신규 투입량)을 쓰지 않습니다.
+ *   새 행이면 그 칸을 비워 두고, 같은 날 회사가 측정한 행이 있으면 그 측정값을 그대로 둡니다.
+ * - 점검이 채우는 칸: 측정 일시·목장·하역 장소·비고·사진·레코드 키·작업 유형·혼합 여부·곰팡이 상태·이상 냄새·깔개 사용량·운영 사이클 ID
+ *
+ * [v19 변경점] 접속 코드 (회사 관리자 / 목장 매니저)
+ * [프로젝트 설정 > 스크립트 속성]에 아래 값을 넣으면 코드 확인이 켜집니다.
+ *   - ADMIN_CODE             : 회사 관리자 코드. 넣지 않으면 지금처럼 누구나 전체 기능을 씁니다.
+ *   - RANCH_CODE_목장이름     : 목장 매니저 코드 (예: RANCH_CODE_건준목장). 목장마다 하나씩.
+ * - 매니저 코드: 그 목장 기록만 불러오고, 그 목장의 현장 점검만 저장합니다 (측정 칸은 바꾸지 못함).
+ * - 기록 삭제·전체 초기화·AI·사용량 조회는 관리자 코드로만 됩니다.
+ * - 코드는 추측하기 어렵게 8자 이상으로 정하고, 바꾸고 싶으면 속성 값만 바꾸면 됩니다 (재배포 불필요).
+ * - GET ?action=whoami&code=... : 코드가 어떤 권한인지 확인 (기록은 주지 않음)
+ *
+ * [v18] 리포트 드라이브 저장 (이후 삭제)
+ *
+ * [v17 변경점] 리포트 독자별 구분
+ * - 목장 내부용: 현장 상황·관리 포인트·다음 방문 때 할 일 (쉬운 존댓말)
+ * - 대외 보고용: 추진 실적·성과와 의의·향후 계획 (개조식 보고서체, 현장 세부 제외)
+ *
+ * [v16 변경점] Gemini 모델 자동 찾기
+ * - 설정된 모델이 없어졌으면(404) 이 키로 쓸 수 있는 최신 Flash 모델을 찾아 저장하고 다시 부릅니다.
+ *   찾은 모델은 스크립트 속성 AI_MODEL_RESOLVED 에 남고, setupAiAccess 실행 로그에서도 볼 수 있습니다.
+ *
+ * [v15 변경점] AI 권한 안내
+ * - "setupAiAccess" 함수 추가: 편집기에서 한 번 실행해 외부 서비스 연결(UrlFetchApp) 권한을 허용합니다.
+ *   권한이 없으면 앱에 "통신이 되지 않아" 대신 권한 안내(code: no_permission)가 뜹니다.
+ * - Gemini 에 요청이 닿지 못한 실패(권한·네트워크)는 하루 사용 횟수에 세지 않습니다.
+ * - 설명 종류를 "field"(깔개 사용·이상 신호) / "farm"(신규 목장) 두 가지로 정리했습니다.
+ *
+ * [v14 변경점] AI 설명 카드 · 비용 절감
+ * - "ai_explain" 요청: 앱의 카드(깔개 사용·이상 신호 점검, 신규 목장 검토)에서 [AI 설명 보기]를 눌렀을 때만
+ *   코드가 계산한 facts 를 받아 2~4문장 설명을 돌려줍니다.
+ * - 하루 호출 상한 기본값 50 → 20 (리포트·설명 합산). 스크립트 속성 AI_DAILY_LIMIT 로 바꿀 수 있습니다.
+ * - 응답 토큰 상한: 리포트 1200, 설명 600. flash 모델은 생각(thinking) 토큰을 끕니다.
+ * - 실패 응답에 code(no_key / rate_limited / daily_limit)를 붙입니다.
+ * - GET ?action=ai_usage : 오늘 사용 횟수 확인 (AI 를 부르지 않음)
+ *
+ * [v13 변경점] 현장 방문 기록
+ * 건준목장은 한 구역에 커피박을 계속 모으고 기존 커피박과 섞어 관리합니다.
+ * 그래서 기록 단위를 "주차"가 아니라 "현장 방문 한 번"으로 바꾸고, 기존 칸 뒤에
+ * 다음 7칸을 덧붙였습니다. 기존 칸은 그대로 두었으므로 예전 기록은 손상되지 않습니다.
+ *   작업 유형 / 신규 투입량(kg) / 혼합 여부 / 곰팡이 상태 / 이상 냄새 /
+ *   깔개 사용량(kg) / 운영 사이클 ID
+ * 예전 행의 새 칸은 비어 있고, 앱은 그것을 "기록 없음"으로 보여 줍니다.
+ * (없는 값을 '곰팡이 없음' 이나 '혼합 완료'로 추정하지 않습니다)
+ * "수거량(kg)" 칸은 과거 호환을 위해 남겨 두고, 새 기록은 신규 투입량과 같은 값을 넣습니다.
+ *
  * [기록 방식]
  * 목장마다 "주간기록_목장이름" 탭이 따로 생기고, 기록 한 건이 그 탭의 한 행입니다.
  * 탭 안은 하역 장소 → 측정 일시 순으로 정렬되어, 한 더미의 함수율 변화가 위아래로 이어집니다.
  * 목장 + 하역 장소 + 측정일이 같으면 새 행을 만들지 않고 기존 행을 갱신합니다.
  *
- * [v11 변경점] 예전 탭 자동 맞춤 시점 수정
+ * [v12 변경점] 자원순환 임팩트 리포트 문장 만들기 (AI)
+ * 앱이 계산한 숫자를 받아 Gemini 로 문장만 만들어 돌려줍니다. 숫자는 만들지 않습니다.
+ * 쓰기 전에 [프로젝트 설정 > 스크립트 속성]에 GEMINI_API_KEY 를 넣어야 합니다.
+ *   - GEMINI_API_KEY : Google AI Studio 에서 받은 키 (필수)
+ *   - AI_MODEL       : 기본 gemini-2.5-flash (선택). 모델이 없어지면 쓸 수 있는 최신 Flash 를 찾아 AI_MODEL_RESOLVED 에 저장합니다
+ *   - AI_DAILY_LIMIT : 하루 호출 상한, 기본 20 (선택)
+ *   - AI_TOKEN       : 정해 두면 이 값을 함께 보낸 요청만 받습니다 (선택)
+ * 이 시트를 건드리지 않으므로 기록 저장과 부딪히지 않습니다.
+ *
+ * [v11] 예전 탭 자동 맞춤 시점 수정
  * 3지점 칸 두 개를 끼워 넣는 일이 저장할 때만 일어나서, 재배포 직후 첫 [불러오기] 에서
  * 예전 행의 사진·레코드 키가 한 칸씩 밀려 읽히는 문제가 있었습니다.
  * 이제 탭을 읽을 때도 모양을 먼저 맞춥니다.
@@ -50,7 +109,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  */
 
 // 앱이 이 값을 보고 스크립트가 최신인지 판단한다. 코드를 고치면 반드시 올릴 것.
-var SCRIPT_VERSION = 11;
+var SCRIPT_VERSION = 20;
 
 var SHEET_PREFIX = "주간기록_";
 var LEGACY_SHEET = "커피박_주간기록";
@@ -60,7 +119,10 @@ var HEADERS = [
   "측정 일시", "목장", "하역 장소", "수거량(kg)", "심부 온도(℃)", "심부 함수율(%)",
   "외기 온도(℃)", "외기 습도(%)", "직전 대비 심부온도(℃)", "직전 대비 함수율(%p)",
   "판정", "비고", "심부 온도 3지점(℃)", "심부 함수율 3지점(%)",
-  "사진 1", "사진 2", "사진 3", "사진 링크", "레코드 키"
+  "사진 1", "사진 2", "사진 3", "사진 링크", "레코드 키",
+  // v13 에서 덧붙인 칸 — 기존 칸 뒤에만 붙여 예전 행이 밀리지 않게 한다
+  "작업 유형", "신규 투입량(kg)", "혼합 여부", "곰팡이 상태", "이상 냄새",
+  "깔개 사용량(kg)", "운영 사이클 ID"
 ];
 var LOCATION_COL = 3;
 var VERDICT_COL = 11;
@@ -69,11 +131,36 @@ var PHOTO_COL = 15;
 var PHOTO_SLOTS = 3;
 var LINK_COL = 18;
 var KEY_COL = 19;
+// v13 에서 덧붙인 칸
+var WORK_COL = 20;
+var ADDED_COL = 21;
+var MIXED_COL = 22;
+var MOLD_COL = 23;
+var ODOR_COL = 24;
+var BEDDING_COL = 25;
+var CYCLE_COL = 26;
+// 회사가 측정 탭에서만 채우는 칸 — 현장 점검 기록은 이 칸을 쓰지 않는다
+// A 측정 일시(기존 행일 때) · D 수거량 · E 심부 온도 · F 함수율 · G 외기 온도 · H 외기 습도
+// I/J 직전 대비 · K 판정 · M/N 3지점 · U 신규 투입량
+var MEASURED_COLS = [1, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 21];
+// v12 까지의 탭 모양 (19열, 마지막이 레코드 키)
+var V12_COLUMN_COUNT = 19;
 // v9 까지의 탭 모양 (17열, 마지막이 레코드 키) — 3지점 칸을 끼워 넣을 때만 쓴다
 var V9_COLUMN_COUNT = 17;
 var V9_LINK_INDEX = 15;
 var V9_KEY_INDEX = 16;
 var V6_KEY_INDEX = 12;
+// AI 문장 만들기 설정 — 실제 값은 [프로젝트 설정 > 스크립트 속성]에 둔다
+var AI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/";
+var AI_MODEL_DEFAULT = "gemini-2.5-flash";
+var AI_DAILY_LIMIT_DEFAULT = 20;
+var AI_MAX_FACTS_CHARS = 20000;
+// 설명 카드는 코드가 추린 facts 만 받는다
+var AI_MAX_EXPLAIN_CHARS = 3000;
+// 응답 길이 상한 (토큰) — 짧게 쓰라고 시키고, 넘치면 잘리게 둔다
+var AI_REPORT_MAX_TOKENS = 1200;
+var AI_EXPLAIN_MAX_TOKENS = 600;
+
 var PHOTO_ROW_HEIGHT = 90;
 var DEFAULT_ROW_HEIGHT = 21;
 
@@ -83,10 +170,94 @@ var DATETIME_RE = /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$/;
 var MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 var MAX_PHOTO_IDS = 10;
 
+/**
+ * 처음 한 번 편집기에서 실행해 외부 서비스 연결 권한을 허용하세요 (AI 리포트·설명용).
+ * Gemini 주소에 요청만 보내 보고, 키는 쓰지 않으므로 사용 횟수도 늘지 않습니다.
+ */
+function setupAiAccess() {
+  var props = PropertiesService.getScriptProperties();
+  var code = UrlFetchApp.fetch(AI_ENDPOINT, { muteHttpExceptions: true }).getResponseCode();
+  var apiKey = String(props.getProperty("GEMINI_API_KEY") || "").trim();
+  Logger.log("외부 서비스 연결 확인 완료 (응답 " + code + ")");
+  if (!apiKey) {
+    Logger.log("GEMINI_API_KEY 가 없습니다 — 스크립트 속성에 넣어주세요");
+    return;
+  }
+  // 모델 목록 조회는 요금이 없다 — 지금 설정된 모델과 쓸 수 있는 최신 Flash 를 보여 준다
+  Logger.log("지금 쓰는 모델: " + currentAiModel(props) + " / 쓸 수 있는 최신 Flash: " + (findFlashModel(apiKey) || "찾지 못함"));
+}
+
 /** 처음 한 번 편집기에서 실행해 드라이브 권한을 허용하세요 */
 function setupPhotoFolder() {
   var folder = getPhotoFolder();
   Logger.log("사진 폴더 준비 완료: " + folder.getUrl());
+}
+
+/* ─────────────────── 접속 코드 (회사 관리자 / 목장 매니저) ─────────────────── */
+
+// 스크립트 속성
+//   ADMIN_CODE              : 회사 관리자 코드 — 넣는 순간부터 코드 확인이 켜진다 (없으면 누구나 전체 기능)
+//   RANCH_CODE_<목장 이름>  : 목장 매니저 코드 (예: RANCH_CODE_건준목장) — 그 목장 기록만 보고 현장점검만 저장
+var RANCH_CODE_PREFIX = "RANCH_CODE_";
+
+/** 목장 이름 비교는 시트 탭 이름과 같은 규칙으로 */
+function sameRanch(a, b) {
+  return ranchSheetName(a) === ranchSheetName(b);
+}
+
+/** 코드 → 권한. open 이면 ADMIN_CODE 가 없어 아직 누구나 쓰는 상태 */
+function resolveAccess(code) {
+  var all = PropertiesService.getScriptProperties().getProperties();
+  var admin = String(all.ADMIN_CODE || "").trim();
+  if (!admin) return { role: "admin", open: true };
+
+  var given = String(code || "").trim();
+  if (!given) return { role: "none", open: false };
+  if (given === admin) return { role: "admin", open: false };
+
+  for (var key in all) {
+    if (!all.hasOwnProperty(key) || key.indexOf(RANCH_CODE_PREFIX) !== 0) continue;
+    if (String(all[key]).trim() === given) {
+      var ranch = key.slice(RANCH_CODE_PREFIX.length).replace(/\\s+/g, " ").trim();
+      if (ranch) return { role: "manager", ranch: ranch, open: false };
+    }
+  }
+  return { role: "none", open: false };
+}
+
+function forbidden(message) {
+  return { status: "error", code: "forbidden", message: message };
+}
+
+/** POST 요청을 권한으로 거른다. 통과하면 null */
+function checkPostAccess(data, access) {
+  if (data.isTest) return null;
+  if (access.role === "admin") return null;
+  if (access.role !== "manager") return forbidden("접속 코드가 필요합니다. 앱에서 코드를 다시 입력해주세요.");
+
+  if (data.eventType === "record_saved") {
+    if (!sameRanch(data.ranchName, access.ranch)) return forbidden(access.ranch + " 기록만 저장할 수 있습니다.");
+    if (data.recordType !== "inspection") return forbidden("목장 매니저는 현장 점검만 기록할 수 있습니다.");
+    return null;
+  }
+  if (data.eventType === "bulk_records" && isArray(data.items)) {
+    for (var i = 0; i < data.items.length; i++) {
+      if (!sameRanch(data.items[i] && data.items[i].ranchName, access.ranch)) {
+        return forbidden(access.ranch + " 기록만 저장할 수 있습니다.");
+      }
+    }
+    return null;
+  }
+  return forbidden("회사 관리자만 할 수 있는 작업입니다.");
+}
+
+function accessResponse(access) {
+  return {
+    status: "success",
+    role: access.role,
+    ranch: access.ranch || "",
+    open: Boolean(access.open)
+  };
 }
 
 function doGet(e) {
@@ -100,14 +271,31 @@ function doGet(e) {
     }
 
     var action = (e && e.parameter && e.parameter.action) || "ping";
+    var access = resolveAccess(e && e.parameter && e.parameter.code);
+
+    // 앱이 처음 열릴 때 코드가 맞는지만 확인한다 (기록은 주지 않는다)
+    if (action === "whoami") return jsonResponse(accessResponse(access));
+
+    if (action === "ai_usage") {
+      if (access.role !== "admin") return jsonResponse(forbidden("회사 관리자만 볼 수 있습니다."));
+      return jsonResponse(readAiUsage());
+    }
 
     // 앱이 실행될 때 모든 목장 탭의 기록을 읽어간다. 시트가 원본이고 앱은 화면이다.
     if (action === "load") {
+      if (access.role === "none") return jsonResponse(forbidden("접속 코드가 필요합니다. 앱에서 코드를 다시 입력해주세요."));
       // 옮길 예전 탭이 있을 때만 잠금을 잡는다 (평소 불러오기는 기다리지 않게)
       if (ss.getSheetByName(LEGACY_SHEET)) withLock(function () { migrateLegacySheet(ss); });
       var records = [];
       var sheets = listRecordSheets(ss);
-      for (var i = 0; i < sheets.length; i++) records = records.concat(readRecords(sheets[i]));
+      for (var i = 0; i < sheets.length; i++) {
+        // 목장 매니저에게는 자기 목장 탭만 준다
+        if (access.role === "manager" && sheets[i].getName() !== ranchSheetName(access.ranch)) continue;
+        records = records.concat(readRecords(sheets[i]));
+      }
+      if (access.role === "manager") {
+        records = records.filter(function (r) { return sameRanch(r.ranchName, access.ranch); });
+      }
       return jsonResponse({
         status: "success",
         spreadsheetTitle: ss.getName(),
@@ -128,16 +316,44 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  var contents = e && e.postData ? e.postData.contents : "";
+  if (!contents) {
+    return jsonResponse({ status: "error", message: "전송된 데이터가 없습니다." });
+  }
+
+  var parsed;
+  try {
+    parsed = JSON.parse(contents);
+  } catch (parseErr) {
+    return jsonResponse({ status: "error", message: "보낸 내용을 해석할 수 없습니다." });
+  }
+
+  // 접속 코드 확인 — 코드는 확인에만 쓰고 기록에는 남기지 않는다
+  var access = resolveAccess(parsed.accessCode);
+  delete parsed.accessCode;
+  var denied = checkPostAccess(parsed, access);
+  if (denied) return jsonResponse(denied);
+
+  // 리포트 문장 만들기는 시트를 건드리지 않는다 — 잠금을 잡지 않아 기록 저장과 부딪히지 않는다
+  // AI 요청은 예외가 나도 JSON 으로 돌려준다 (앱이 이유를 보여 줄 수 있게)
+  if (parsed.eventType === "standard_ai_report" || parsed.eventType === "ai_report" || parsed.eventType === "ai_explain") {
+    try {
+      if (parsed.eventType === "standard_ai_report") {
+        return jsonResponse(generateStandardImpactReport(parsed));
+      }
+      return jsonResponse(
+        parsed.eventType === "ai_report" ? generateImpactReport(parsed) : generateExplanation(parsed)
+      );
+    } catch (aiErr) {
+      return jsonResponse({ status: "error", message: "AI 요청을 처리하지 못했습니다: " + aiErr });
+    }
+  }
+
   var lock = LockService.getScriptLock();
   try {
     lock.waitLock(25000);
 
-    var contents = e && e.postData ? e.postData.contents : "";
-    if (!contents) {
-      return jsonResponse({ status: "error", message: "전송된 데이터가 없습니다." });
-    }
-
-    var data = JSON.parse(contents);
+    var data = parsed;
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) {
       return jsonResponse({
@@ -288,11 +504,19 @@ function listRecordSheets(ss) {
   return out;
 }
 
-/** v9 까지의 탭(17열)이면 "비고" 뒤에 3지점 칸 두 개를 끼워 넣는다 (기존 값은 오른쪽으로 밀린다) */
+/**
+ * 예전 탭을 최신 모양으로 맞춘다. 읽기 전에도 부르므로 값이 밀려 읽히는 일이 없다.
+ * - v9(17열): "비고" 뒤에 3지점 칸 두 개를 끼워 넣는다 (기존 값은 오른쪽으로 밀린다)
+ * - v12(19열): 뒤에 7칸을 덧붙이기만 한다 — 기존 값은 제자리에 그대로 있다
+ */
 function upgradeSheetShape(sheet) {
   if (sheet.getLastColumn() === V9_COLUMN_COUNT &&
       String(sheet.getRange(1, V9_COLUMN_COUNT).getValue()) === "레코드 키") {
     sheet.insertColumnsBefore(POINTS_COL, 2);
+    ensureHeaders(sheet);
+    return;
+  }
+  if (sheet.getLastColumn() >= V12_COLUMN_COUNT && sheet.getLastColumn() < HEADERS.length) {
     ensureHeaders(sheet);
   }
 }
@@ -491,6 +715,13 @@ function safeNumber(v) {
   return isFinite(n) ? n : 0;
 }
 
+/** 값이 없으면 빈 칸으로 둔다 — 적지 않은 것과 0 을 구별하기 위해서다 */
+function optionalNumber(v) {
+  if (v === "" || v === null || v === undefined) return "";
+  var n = Number(v);
+  return isFinite(n) && n >= 0 ? n : "";
+}
+
 /** "사진 링크" 칸의 드라이브 링크들에서 파일 ID 를 뽑는다 */
 function parsePhotoIds(text) {
   var ids = [];
@@ -517,6 +748,464 @@ function toDateTimeString(v) {
     return Utilities.formatDate(v, "Asia/Seoul", "yyyy-MM-dd HH:mm");
   }
   return String(v).trim();
+}
+
+/* ─────────────────── AI 문장 만들기 (리포트 · 설명) ─────────────────── */
+
+/**
+ * 앱이 계산해 보낸 숫자로 문장만 만든다.
+ * 숫자를 새로 만들지 않도록 프롬프트에서 못을 박는다.
+ * 실패하면 code 로 종류를 알려 준다: no_key / rate_limited / daily_limit
+ */
+
+/** 키·열쇠·자료 크기·하루 횟수를 확인한다. 통과하면 { ok: true, ... } */
+function prepareAiCall(data, maxChars) {
+  var props = PropertiesService.getScriptProperties();
+  var apiKey = String(props.getProperty("GEMINI_API_KEY") || "").trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      response: {
+        status: "error",
+        code: "no_key",
+        message: "AI 설명 기능이 설정되지 않았습니다. Apps Script [프로젝트 설정 > 스크립트 속성]에 GEMINI_API_KEY 를 넣어주세요."
+      }
+    };
+  }
+
+  var token = String(props.getProperty("AI_TOKEN") || "").trim();
+  if (token && String(data.token || "") !== token) {
+    return { ok: false, response: { status: "error", message: "AI 호출 열쇠가 맞지 않습니다." } };
+  }
+
+  var facts = data.facts;
+  if (!facts || typeof facts !== "object") {
+    return { ok: false, response: { status: "error", message: "설명에 쓸 자료가 없습니다." } };
+  }
+
+  var factsText = JSON.stringify(facts);
+  if (factsText.length > maxChars) {
+    return { ok: false, response: { status: "error", message: "보낸 자료가 너무 큽니다. 범위를 좁혀서 다시 시도해주세요." } };
+  }
+
+  var quota = checkAiQuota(props);
+  if (!quota.allowed) {
+    return {
+      ok: false,
+      response: {
+        status: "error",
+        code: "daily_limit",
+        message: "오늘 AI 설명 사용 횟수(" + quota.limit + "회)를 모두 사용했습니다.",
+        usedToday: quota.used,
+        dailyLimit: quota.limit
+      }
+    };
+  }
+
+  var model = currentAiModel(props);
+  return { ok: true, props: props, apiKey: apiKey, model: model, factsText: factsText, quota: quota };
+}
+
+function generateImpactReport(data) {
+  var prep = prepareAiCall(data, AI_MAX_FACTS_CHARS);
+  if (!prep.ok) return prep.response;
+
+  var called = callGemini(
+    prep,
+    reportSystemPrompt(String(data.audience || "farm")),
+    "아래는 앱이 계산한 자료입니다.\\n\\n" + prep.factsText,
+    AI_REPORT_MAX_TOKENS
+  );
+  if (!called.ok) return aiFailure(called, prep.quota);
+
+  var sections = called.json;
+  if (!sections.summary || !sections.meaning || !sections.recommendation) {
+    return { status: "error", message: "AI 응답에 빠진 항목이 있습니다. 다시 시도해주세요." };
+  }
+  if (Object.prototype.toString.call(sections.actions) !== "[object Array]") sections.actions = [];
+
+  return {
+    status: "success",
+    sections: sections,
+    model: prep.model,
+    usedToday: prep.quota.used,
+    dailyLimit: prep.quota.limit
+  };
+}
+
+function generateStandardImpactReport(data) {
+  var prep = prepareAiCall(data, AI_MAX_FACTS_CHARS);
+  if (!prep.ok) return prep.response;
+
+  var called = callGemini(
+    prep,
+    standardReportSystemPrompt(),
+    "아래는 제주도 커피박 수거 사업 월간 현황 데이터(코드 계산 완료)입니다.\\n\\n" + prep.factsText,
+    AI_REPORT_MAX_TOKENS
+  );
+  if (!called.ok) return aiFailure(called, prep.quota);
+
+  var sections = called.json;
+  if (!sections || typeof sections !== "object") {
+    return { status: "error", message: "AI 응답 형식이 올바르지 않습니다." };
+  }
+
+  return {
+    status: "success",
+    sections: sections,
+    model: prep.model,
+    usedToday: prep.quota.used,
+    dailyLimit: prep.quota.limit
+  };
+}
+
+function standardReportSystemPrompt() {
+  return [
+    "당신은 제주도 커피박 수거 사업의 월간 현황 보고서를 작성하는 공공 행정 실무 담당자입니다.",
+    "",
+    "핵심 원칙: 숫자는 코드, 해석 문장은 AI",
+    "1. 주어진 데이터(facts)에 이미 계산된 숫자만 그대로 인용하십시오.",
+    "2. 합계, 평균, 비율, 순위, 전월 대비 증감, 일평균 등의 숫자를 AI가 직접 계산하거나 수정하지 마십시오.",
+    "3. 데이터에 없는 사실(임의의 휴가철, 날씨, 검증되지 않은 CO2/탄소 감축량 등)을 추측하여 지어내지 마십시오.",
+    "4. 문체는 정중하고 간결한 행정 보고서체(~했습니다, ~확인되었습니다, ~계획입니다)로 작성하십시오.",
+    "5. 과장된 표현('매우 성공적', '놀라운 성과', '극적인 반등')은 금지하며 객관적 사실 위주로 기술하십시오.",
+    "",
+    "반드시 아래 JSON 형식으로만 응답하십시오:",
+    "{",
+    '  "executiveSummary": "핵심 KPI 요약문 (2~3문장 이내)",',
+    '  "trendCommentary": "주차별 수거량 추이 및 일평균 편차에 대한 분석 (1~2문장)",',
+    '  "issues": [',
+    '    { "title": "이슈 제목", "description": "데이터에 근거한 사실", "action": "실행 가능한 구체적 조치" }',
+    "  ],",
+    '  "nextActions": [',
+    '    "구체적 실행 행동 1",',
+    '    "구체적 실행 행동 2",',
+    '    "구체적 실행 행동 3"',
+    "  ]",
+    "}"
+  ].join("\\n");
+}
+
+/** 카드의 코드 판정을 짧게 풀어 쓴다 — 사람이 [AI 설명 보기]를 눌렀을 때만 온다 */
+function generateExplanation(data) {
+  var kind = String(data.kind || "");
+  if (kind !== "field" && kind !== "farm") {
+    return { status: "error", message: "알 수 없는 설명 종류입니다." };
+  }
+
+  var prep = prepareAiCall(data, AI_MAX_EXPLAIN_CHARS);
+  if (!prep.ok) return prep.response;
+
+  var called = callGemini(
+    prep,
+    explainSystemPrompt(kind),
+    "아래는 앱이 코드로 계산한 결과입니다.\\n\\n" + prep.factsText,
+    AI_EXPLAIN_MAX_TOKENS
+  );
+  if (!called.ok) return aiFailure(called, prep.quota);
+
+  var reply = called.json;
+  if (!reply.summary) return { status: "error", message: "AI 가 보낸 설명이 비어 있습니다." };
+  var actions = Object.prototype.toString.call(reply.actions) === "[object Array]" ? reply.actions.slice(0, 3) : [];
+
+  return {
+    status: "success",
+    explanation: { summary: String(reply.summary), actions: actions },
+    model: prep.model,
+    usedToday: prep.quota.used,
+    dailyLimit: prep.quota.limit
+  };
+}
+
+function aiFailure(called, quota) {
+  var out = { status: "error", message: called.message, usedToday: quota.used, dailyLimit: quota.limit };
+  if (called.code) out.code = called.code;
+  return out;
+}
+
+/** 관리 화면에서 오늘 사용량을 본다 — AI 를 부르지 않고, 횟수도 늘리지 않는다 */
+function readAiUsage() {
+  var props = PropertiesService.getScriptProperties();
+  var limit = aiDailyLimit(props);
+  var today = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd");
+  var used = String(props.getProperty("AI_USED_DAY") || "") === today ? Number(props.getProperty("AI_USED_COUNT") || 0) : 0;
+  return {
+    status: "success",
+    usedToday: used,
+    dailyLimit: limit,
+    model: currentAiModel(props),
+    keyConfigured: Boolean(String(props.getProperty("GEMINI_API_KEY") || "").trim())
+  };
+}
+
+function aiDailyLimit(props) {
+  var limit = Number(props.getProperty("AI_DAILY_LIMIT") || AI_DAILY_LIMIT_DEFAULT);
+  return !limit || limit < 1 ? AI_DAILY_LIMIT_DEFAULT : limit;
+}
+
+/** 오늘 남은 횟수 확인 — 날짜가 바뀌면 자동으로 0 부터 (여기서는 세지 않는다) */
+function checkAiQuota(props) {
+  var limit = aiDailyLimit(props);
+  var today = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd");
+  var used = String(props.getProperty("AI_USED_DAY") || "") === today ? Number(props.getProperty("AI_USED_COUNT") || 0) : 0;
+  return { allowed: used < limit, used: used, limit: limit, today: today };
+}
+
+/** Gemini 가 요청을 받았을 때만 한 번 센다 (권한·네트워크 실패는 세지 않는다) */
+function countAiQuota(props, quota) {
+  quota.used = quota.used + 1;
+  props.setProperty("AI_USED_DAY", quota.today);
+  props.setProperty("AI_USED_COUNT", String(quota.used));
+}
+
+function reportSystemPrompt(audience) {
+  var common = [
+    "지켜야 할 규칙",
+    "1. 주어진 자료에 있는 숫자만 씁니다. 새 숫자를 만들거나 직접 계산하지 마세요.",
+    "2. 자료에 없는 사실(환경 효과, 인증, 다른 사례, 예측치)을 지어내지 마세요.",
+    "3. collection 은 매장에서 걷은 양, compost 는 목장에 하역해 부숙 중인 양입니다.",
+    "   서로 다른 숫자이므로 하나를 다른 하나로 바꿔 말하거나 더하지 마세요.",
+    "4. 목장은 한 구역에 커피박을 계속 모으고 기존 커피박과 섞습니다.",
+    "   앞뒤 기록을 같은 커피박 한 묶음의 부숙 변화라고 설명하지 마세요.",
+    "5. field 의 판정(beddingStatus)과 추세는 앱이 코드로 계산한 값입니다. 바꾸지 말고 그대로 쓰세요.",
+    "6. 과장하지 말고, 자료가 없는 항목(null)은 자료가 없다고 쓰거나 언급하지 마세요."
+  ];
+
+  if (audience === "official") {
+    return [
+      "당신은 지자체·커피 공급처·협력 기관에 내는 '커피박 자원순환 사업 실적 보고서'를 쓰는 담당자입니다.",
+      "읽는 사람은 현장을 모르는 외부 기관입니다. 사업 성과와 의의를 공식 보고서 문체로 정리합니다.",
+      ""
+    ].concat(common, [
+      "7. 문장은 개조식 보고서체로 끝냅니다 (예: '~함', '~임', '~할 계획임'). '~습니다' 같은 존댓말은 쓰지 않습니다.",
+      "8. 혼합 횟수, 곰팡이, 방문 간격, 함수율 같은 현장 작업 세부는 쓰지 않습니다.",
+      "9. 절감액(savings)은 가정에 따른 추정치임을 밝힙니다. 수거량 출처가 현장 하역 기록이면 그렇게 밝힙니다.",
+      "",
+      "답은 아래 JSON 형식만 씁니다. 다른 말은 붙이지 마세요.",
+      '{"headline":"...","summary":"...","meaning":"...","recommendation":"...","actions":["...","...","..."]}',
+      "- headline: 보고서 제목 (예: 'OOOO년 O월 커피박 자원순환 추진 실적'), 30자 이내",
+      "- summary: 추진 실적 — 수거량, 참여 매장 수, 전월 대비, 목장 자원화(부숙) 현황 (2~3문장)",
+      "- meaning: 성과와 의의 — 톱밥 대체 절감 추정, 폐자원의 축산 자원화 (2~3문장)",
+      "- recommendation: 향후 계획 (2문장)",
+      "- actions: 향후 추진 과제 3가지, 명사형으로 끝냄 (예: '참여 매장 확대 검토'), 각 30자 이내"
+    ]).join("\\n");
+  }
+
+  return [
+    "당신은 목장 관리자에게 이번 달 커피박 더미 관리 상황을 알려 주는 현장 담당자입니다.",
+    "읽는 사람은 현장에서 일하는 사람입니다. 더미 상태와 다음에 할 일을 쉽게 정리합니다.",
+    ""
+  ].concat(common, [
+    "7. 짧고 쉬운 존댓말로 씁니다. 어려운 용어는 풀어 씁니다.",
+    "8. 혼합은 기존 커피박을 삽으로 한 번씩 뒤집어 주는 작업입니다.",
+    "9. 매장 수거량·절감액 같은 사업 성과는 쓰지 않거나 한 문장 이내로만 씁니다.",
+    "",
+    "답은 아래 JSON 형식만 씁니다. 다른 말은 붙이지 마세요.",
+    '{"headline":"...","summary":"...","meaning":"...","recommendation":"...","actions":["...","...","..."]}',
+    "- headline: 지금 더미 상태를 한 줄로 (예: '함수율이 내려가며 깔개 사용 준비 중'), 25자 이내",
+    "- summary: 이번 달 현장 상황 — 투입량, 현재 더미량, 함수율·온도 추세 (2~3문장)",
+    "- meaning: 관리 포인트 — 깔개 사용 판단과 그 이유, 혼합·곰팡이 상태 (2~3문장)",
+    "- recommendation: 다음 방문 때 할 일 (2문장)",
+    "- actions: 현장 작업 3가지, '~하기'로 끝냄 (예: '기존 커피박을 삽으로 뒤집기'), 각 25자 이내"
+  ]).join("\\n");
+}
+
+function explainSystemPrompt(kind) {
+  var topic = {
+    field: "커피박 더미를 소 깔개로 쓸 수 있는지에 대한 앱의 판정(status)과, 앱이 찾아낸 이상 신호(signals)",
+    farm: "새 목장에 커피박 부숙 관리를 적용할 때 앱이 정한 운영 유형·관리 수준·부족한 조건"
+  }[kind];
+
+  return [
+    "당신은 목장 현장 관리자에게 " + topic + "을 짧게 풀어 설명하는 도우미입니다.",
+    "",
+    "지켜야 할 규칙",
+    "1. 판정·상태·숫자는 앱이 코드로 정한 값입니다. 바꾸거나 새로 계산하지 말고 그대로 설명만 하세요.",
+    "2. 자료에 없는 숫자나 사실을 만들지 마세요. 자료가 부족하면 부족하다고 쓰세요.",
+    "3. 혼합은 기존 커피박을 삽으로 한 번씩 뒤집어 주는 작업입니다.",
+    "4. 목장은 한 구역에 커피박을 계속 모아 섞으므로, 측정값은 그 시점의 전체 더미 상태입니다.",
+    "5. 과거 기록을 하나하나 다시 읊지 말고, 핵심만 쓰세요.",
+    "6. 한국어 존댓말, 쉬운 말로 씁니다.",
+    "",
+    "답은 아래 JSON 형식만 씁니다. 다른 말은 붙이지 마세요.",
+    '{"summary":"...","actions":["...","..."]}',
+    "- summary: 2~4문장",
+    "- actions: 현장에서 할 일 1~3개, 각 35자 이내"
+  ].join("\\n");
+}
+
+/** 스크립트 속성의 모델 → 자동으로 찾아 둔 모델 → 기본값 */
+function currentAiModel(props) {
+  var model = props.getProperty("AI_MODEL") || props.getProperty("AI_MODEL_RESOLVED") || AI_MODEL_DEFAULT;
+  return String(model).trim() || AI_MODEL_DEFAULT;
+}
+
+/**
+ * 이 키로 쓸 수 있는 최신 Flash 모델을 찾는다 (모델 목록 조회는 요금이 없다).
+ * 미리보기·실험·이미지·음성 모델과 Lite 는 뺀다.
+ */
+function findFlashModel(apiKey) {
+  var res = UrlFetchApp.fetch(AI_ENDPOINT.replace(/\\/$/, "") + "?pageSize=1000", {
+    muteHttpExceptions: true,
+    headers: { "x-goog-api-key": apiKey }
+  });
+  if (res.getResponseCode() !== 200) return null;
+
+  var models = JSON.parse(res.getContentText()).models || [];
+  var best = null;
+  var bestVersion = -1;
+  for (var i = 0; i < models.length; i++) {
+    var name = String(models[i].name || "").replace(/^models\\//, "");
+    var methods = models[i].supportedGenerationMethods || [];
+    var matched = /^gemini-(\\d+(?:\\.\\d+)?)-flash$/.exec(name);
+    if (!matched || methods.indexOf("generateContent") < 0) continue;
+    var version = Number(matched[1]);
+    if (version > bestVersion) {
+      best = name;
+      bestVersion = version;
+    }
+  }
+  return best;
+}
+
+function geminiOptions(apiKey, model, systemText, userText, maxTokens, thinkingOff) {
+  var generationConfig = {
+    temperature: 0.3,
+    maxOutputTokens: maxTokens,
+    responseMimeType: "application/json"
+  };
+  // flash 계열은 생각(thinking) 토큰도 출력 요금이라 끈다 — 짧은 설명에는 필요 없다
+  if (thinkingOff) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
+  return {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemText }] },
+      contents: [{ role: "user", parts: [{ text: userText }] }],
+      generationConfig: generationConfig
+    }),
+    muteHttpExceptions: true,
+    headers: { "x-goog-api-key": apiKey }
+  };
+}
+
+/**
+ * Gemini 를 부른다. 성공하면 { ok: true, json }
+ * - 모델이 없어졌으면(404) 쓸 수 있는 최신 Flash 모델을 찾아 저장하고 한 번 더 부른다
+ * - 모델이 thinking 끄기를 받지 않으면(400) 그 설정을 빼고 한 번 더 부른다
+ * - 서버 오류(5xx)는 잠시 뒤 한 번 더 부른다
+ */
+function callGemini(prep, systemText, userText, maxTokens) {
+  var model = prep.model;
+  var thinkingOff = /flash/.test(model);
+  var modelSearched = false;
+  var serverRetried = false;
+
+  for (var attempt = 0; attempt < 4; attempt++) {
+    var response;
+    try {
+      response = UrlFetchApp.fetch(
+        AI_ENDPOINT + encodeURIComponent(model) + ":generateContent",
+        geminiOptions(prep.apiKey, model, systemText, userText, maxTokens, thinkingOff)
+      );
+    } catch (err) {
+      // 예외를 그대로 던지면 웹 앱이 CORS 없는 오류 화면을 돌려줘 앱에서는 '통신 실패'로만 보인다
+      if (/권한|permission|external_request/i.test(String(err))) {
+        return {
+          ok: false,
+          code: "no_permission",
+          message: "Apps Script 에 외부 서비스 연결 권한이 없습니다. 편집기에서 setupAiAccess 를 한 번 실행해 허용한 뒤 새 버전으로 배포해주세요."
+        };
+      }
+      return { ok: false, message: "AI 서버에 연결하지 못했습니다. 잠시 뒤 다시 시도해주세요." };
+    }
+    var code = response.getResponseCode();
+
+    if (code === 404) {
+      // 없는 모델은 요금이 없으므로 사용 횟수에 세지 않는다
+      var found = null;
+      if (!modelSearched) {
+        modelSearched = true;
+        try {
+          found = findFlashModel(prep.apiKey);
+        } catch (searchErr) {
+          found = null;
+        }
+      }
+      if (found && found !== model) {
+        if (prep.props.getProperty("AI_MODEL") === model) prep.props.deleteProperty("AI_MODEL");
+        prep.props.setProperty("AI_MODEL_RESOLVED", found);
+        model = found;
+        prep.model = found;
+        thinkingOff = /flash/.test(found);
+        continue;
+      }
+      return {
+        ok: false,
+        message: "AI 모델(" + model + ")을 찾을 수 없습니다. 스크립트 속성 AI_MODEL 에 쓸 수 있는 모델 이름을 넣어주세요."
+      };
+    }
+
+    countAiQuota(prep.props, prep.quota);
+    var body = response.getContentText();
+
+    if (code === 200) return readGeminiReply(body);
+    if (code === 400 && thinkingOff && /thinking/i.test(body)) {
+      thinkingOff = false;
+      continue;
+    }
+    if (code === 429) {
+      return { ok: false, code: "rate_limited", message: "AI 서버가 혼잡합니다. 잠시 뒤 다시 시도해주세요." };
+    }
+    if (code >= 500) {
+      if (!serverRetried) {
+        serverRetried = true;
+        Utilities.sleep(1500);
+        continue;
+      }
+      return { ok: false, code: "rate_limited", message: "AI 서버가 혼잡합니다. 잠시 뒤 다시 시도해주세요." };
+    }
+    if (code === 400 || code === 403) {
+      return { ok: false, message: "AI 키 또는 모델(" + model + ") 설정을 확인해주세요. (오류 " + code + ")" };
+    }
+    return { ok: false, message: "AI 요청이 실패했습니다. (오류 " + code + ")" };
+  }
+  return { ok: false, message: "AI 요청이 실패했습니다." };
+}
+
+/** Gemini 응답에서 JSON 한 덩어리를 꺼낸다 */
+function readGeminiReply(body) {
+  var parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch (err) {
+    return { ok: false, message: "AI 응답을 해석하지 못했습니다." };
+  }
+
+  if (parsed.promptFeedback && parsed.promptFeedback.blockReason) {
+    return { ok: false, message: "AI 가 요청을 거절했습니다 (" + parsed.promptFeedback.blockReason + ")." };
+  }
+
+  var candidates = parsed.candidates || [];
+  if (!candidates.length) return { ok: false, message: "AI 가 빈 응답을 보냈습니다." };
+
+  var parts = (candidates[0].content && candidates[0].content.parts) || [];
+  var text = "";
+  for (var i = 0; i < parts.length; i++) text += String(parts[i].text || "");
+  text = text.trim();
+  if (!text) return { ok: false, message: "AI 가 빈 응답을 보냈습니다." };
+
+  // 형식이 어긋나 앞뒤에 다른 글자가 붙어 오는 경우까지 받아 준다
+  var start = text.indexOf("{");
+  var end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return { ok: false, message: "AI 응답 형식이 올바르지 않습니다." };
+
+  try {
+    return { ok: true, json: JSON.parse(text.slice(start, end + 1)) };
+  } catch (err2) {
+    return { ok: false, message: "AI 응답 형식이 올바르지 않습니다. (응답이 길어 잘렸을 수 있습니다)" };
+  }
 }
 
 function fieldNow() {
@@ -548,7 +1237,15 @@ function readRecords(sheet) {
       coreTempPoints: String(r[POINTS_COL - 1] || ""),
       moisturePoints: String(r[POINTS_COL] || ""),
       photoIds: parsePhotoIds(r[LINK_COL - 1]),
-      recordKey: String(r[KEY_COL - 1] || "")
+      recordKey: String(r[KEY_COL - 1] || ""),
+      // 예전 행은 이 칸들이 비어 있다. 빈 값을 그대로 넘겨 앱이 "기록 없음"으로 보이게 한다.
+      workType: String(r[WORK_COL - 1] || ""),
+      addedKg: String(r[ADDED_COL - 1] === 0 ? "0" : (r[ADDED_COL - 1] || "")),
+      mixed: String(r[MIXED_COL - 1] || ""),
+      moldStatus: String(r[MOLD_COL - 1] || ""),
+      odor: String(r[ODOR_COL - 1] || ""),
+      beddingUsedKg: String(r[BEDDING_COL - 1] === 0 ? "0" : (r[BEDDING_COL - 1] || "")),
+      cycleId: String(r[CYCLE_COL - 1] || "")
     });
   }
 
@@ -569,12 +1266,25 @@ function upsertRows(sheet, items) {
 
     // 같은 요청 안에 같은 키가 또 나오면 대기 중인 행을 최신 값으로 교체
     if (pendingIndex.hasOwnProperty(key)) {
+      if (row.keepMeasured) {
+        var earlier = pending[pendingIndex[key]].values;
+        for (var m = 0; m < MEASURED_COLS.length; m++) {
+          row.values[MEASURED_COLS[m] - 1] = earlier[MEASURED_COLS[m] - 1];
+        }
+      }
       pending[pendingIndex[key]] = row;
       continue;
     }
 
     var existing = keyMap[key];
     if (existing) {
+      // 같은 날 회사가 잰 측정값을 현장 점검 저장이 빈칸으로 지우지 않게 한다
+      if (row.keepMeasured) {
+        var current = sheet.getRange(existing, 1, 1, HEADERS.length).getValues()[0];
+        for (var c = 0; c < MEASURED_COLS.length; c++) {
+          row.values[MEASURED_COLS[c] - 1] = current[MEASURED_COLS[c] - 1];
+        }
+      }
       sheet.getRange(existing, 1, 1, HEADERS.length).setValues([row.values]);
       sheet.getRange(existing, PHOTO_COL, 1, PHOTO_SLOTS).setFormulas([row.formulas]);
       updated++;
@@ -624,34 +1334,48 @@ function formatRow(data) {
   var formulas = [];
   for (var s = 0; s < PHOTO_SLOTS; s++) formulas.push(thumbnailFormula(ids[s]));
 
-  // 외부에서 온 글자는 모두 safeText 로, 숫자는 safeNumber 로 넣는다 (수식 주입 방지)
+  // 현장 점검(inspection) 타입이면 측정 콜럼(D~K, M~N)은 빈 칸으로 남긴다
+  // — 수거량, 심부온도, 함수율, 외기온도, 외기습도, 판정, 3지점에 0 이 기록되지 않도록
+  var isInspection = String(data.recordType || "") === "inspection";
+
+  // 외부에서 온 글자는 모두 safeText 로, 숫자는 optionalNumber/safeNumber 로 넣는다 (수식 주입 방지)
   return {
     values: [
       DATETIME_RE.test(String(data.dateTime || "")) ? data.dateTime : fieldNow(),
       safeText(data.ranchName || "-"),
       safeText(data.location || "-"),
-      safeNumber(data.collectedKg),
-      safeNumber(data.coreTemp),
-      safeNumber(data.moisture),
-      safeNumber(data.ambientTemp),
-      safeNumber(data.ambientHum),
-      delta(data.coreTempDelta),
-      delta(data.moistureDelta),
-      safeText(data.verdictTitle || "-"),
-      safeText(data.notes || ""),
-      safeText(data.coreTempPoints || ""),
-      safeText(data.moisturePoints || ""),
+      isInspection ? "" : optionalNumber(data.collectedKg),   // D 수거량
+      isInspection ? "" : optionalNumber(data.coreTemp),      // E 심부 온도
+      isInspection ? "" : optionalNumber(data.moisture),      // F 심부 함수율
+      isInspection ? "" : optionalNumber(data.ambientTemp),   // G 외기 온도
+      isInspection ? "" : optionalNumber(data.ambientHum),    // H 외기 습도
+      isInspection ? "" : delta(data.coreTempDelta),          // I 직전 대비 심부온도
+      isInspection ? "" : delta(data.moistureDelta),          // J 직전 대비 함수율
+      isInspection ? "" : safeText(data.verdictTitle || ""),  // K 판정
+      safeText(data.notes || ""),                             // L 비고
+      isInspection ? "" : safeText(data.coreTempPoints || ""), // M 심부온도 3지점
+      isInspection ? "" : safeText(data.moisturePoints || ""), // N 심부함수율 3지점
       "", "", "",
       links.join("\\n"),
-      safeText(data.recordKey)
+      safeText(data.recordKey),
+      // v13 칸 — 앱이 값을 보내지 않으면 빈 칸으로 남긴다 (0 이나 '없음'으로 채우지 않는다)
+      safeText(data.workType || ""),                          // T 작업 유형
+      isInspection ? "" : optionalNumber(data.addedKg),      // U 신규 투입량
+      safeText(data.mixed || ""),                             // V 혼합 여부
+      safeText(data.moldStatus || ""),                        // W 곰팡이 상태
+      safeText(data.odor || ""),                              // X 이상 냄새
+      optionalNumber(data.beddingUsedKg),                     // Y 깔개 사용량
+      safeText(data.cycleId || "")                            // Z 운영 사이클 ID
     ],
-    formulas: formulas
+    formulas: formulas,
+    // 기존 행을 갱신할 때 측정 칸을 시트 값 그대로 둔다
+    keepMeasured: isInspection
   };
 }
 
 function verdictStyle(text) {
   text = String(text || "");
-  if (text.indexOf("사용 가능") !== -1) return ["#e6f4ea", "#137333", "bold"];
+  if (text.indexOf("사용 후보") !== -1 || text.indexOf("사용 가능") !== -1) return ["#e6f4ea", "#137333", "bold"];
   if (text.indexOf("혼합 필요") !== -1) return ["#fce8e6", "#c5221f", "bold"];
   if (text.indexOf("건조") !== -1) return ["#fef7e0", "#b06000", "bold"];
   return ["#e8f0fe", "#1a73e8", "normal"];
@@ -727,8 +1451,8 @@ export const GOOGLE_SHEETS_GUIDE_STEPS = [
   },
   {
     step: 4,
-    title: "사진 권한 허용 (처음 한 번)",
-    desc: "편집기 위쪽 함수 선택 칸에서 'setupPhotoFolder'를 고르고 [실행] → [권한 검토] → 계정 선택 → '확인되지 않은 앱' 경고가 나오면 [고급] → [이동] → [허용]을 누릅니다. 이미 허용했다면 건너뜁니다.",
+    title: "사진·AI 권한 허용 (처음 한 번)",
+    desc: "편집기 위쪽 함수 선택 칸에서 'setupPhotoFolder'를 고르고 [실행] → [권한 검토] → 계정 선택 → '확인되지 않은 앱' 경고가 나오면 [고급] → [이동] → [허용]을 누릅니다. 이어서 'setupAiAccess'도 같은 방법으로 실행해 외부 서비스 연결(AI) 권한을 허용합니다. 이미 허용했다면 건너뜁니다.",
   },
   {
     step: 5,

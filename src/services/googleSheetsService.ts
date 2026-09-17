@@ -1,10 +1,33 @@
 import type { CorePoint, MeasurementRecord, RecordPhoto } from '../types';
-import { buildRecordKey, getCurrentDateTimeString, normalizeName } from '../utils/calculations';
+import { appendAccessCode, withAccessCode } from './accessCode';
+import { buildRecordKey, getCurrentDateTimeString, hasMeasurement, normalizeName } from '../utils/calculations';
 import type { AnnotatedRecord } from '../utils/calculations';
+import { describeWorkType, getBeddingUsedKg, MOLD_LABELS, parseMoldStatus } from '../utils/fieldOps';
 import { getDriveViewUrl } from '../utils/photos';
 import { DEFAULT_RANCH_NAME } from '../constants/defaultData';
 
-export const REQUIRED_SCRIPT_VERSION = 11;
+export const REQUIRED_SCRIPT_VERSION = 20;
+
+/* 시트에 사람이 읽을 수 있는 글자로 적는다. 빈 칸은 "기록 없음" 이라는 뜻이다. */
+const MIXED_YES = '완료';
+const MIXED_NO = '안 함';
+const ODOR_YES = '있음';
+const ODOR_NO = '없음';
+
+/** 빈 칸이면 undefined — 없는 값을 0 이나 '없음'으로 추정하지 않는다 */
+function toOptionalNumber(v: unknown): number | undefined {
+  const text = String(v ?? '').trim();
+  if (!text) return undefined;
+  const n = Number(text);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function toOptionalBoolean(v: unknown, yes: string, no: string): boolean | undefined {
+  const text = String(v ?? '').trim();
+  if (text === yes || text === 'true') return true;
+  if (text === no || text === 'false') return false;
+  return undefined;
+}
 
 /** 구글 드라이브 파일 ID 형식 — 이 형식이 아닌 값은 사진으로 받지 않는다 */
 const DRIVE_FILE_ID_RE = /^[A-Za-z0-9_-]{10,200}$/;
@@ -18,6 +41,8 @@ export interface SyncResult {
   scriptVersion?: number;
   /** 기록 저장 응답에 담긴, 그 기록의 드라이브 사진 전체 (v7 이상) */
   photos?: RecordPhoto[];
+  /** 서버가 접속 코드로 막았다 (v19 이상) */
+  denied?: boolean;
 }
 
 function toPhotos(fileIds: unknown): RecordPhoto[] {
@@ -34,21 +59,32 @@ interface RecordPayload {
   dateTime: string;
   ranchName: string;
   location: string;
-  collectedKg: number;
-  coreTemp: number;
-  moisture: number;
-  ambientTemp: number;
-  ambientHum: number;
-  /** 같은 장소 직전 기록 대비 변화. 첫 기록이면 빈 값 */
+  /** 현장 점검(inspection) 타입은 빈 문자열 — 측정하지 않는 항목 */
+  collectedKg: number | '';
+  coreTemp: number | '';
+  moisture: number | '';
+  ambientTemp: number | '';
+  ambientHum: number | '';
+  /** 같은 장소 직전 기록 대비 변화. 첫 기록이거나 inspection이면 빈 값 */
   coreTempDelta: number | '';
   moistureDelta: number | '';
   verdictTitle: string;
   notes: string;
-  /** 지점별 심부 온도·함수율을 '29.5 / 30.1 / 28.8' 형태로 (평균의 근거를 시트에서도 보이게) */
+  /** 지점별 심부 온도·함수율. inspection이면 빈 문자열 */
   coreTempPoints: string;
   moisturePoints: string;
   /** 이미 드라이브에 올라간 사진 — 행을 갱신해도 사진 칸이 비지 않도록 함께 보낸다 */
   photoIds: string[];
+
+  /* ── 현장 방문 기록 (v13~). 값이 없으면 빈 칸으로 보내 "기록 없음"을 유지한다 ── */
+  workType: string;
+  addedKg: number | '';
+  mixed: string;
+  moldStatus: string;
+  odor: string;
+  beddingUsedKg: number | '';
+  cycleId: string;
+  recordType: string;
 }
 
 /**
@@ -58,8 +94,9 @@ interface RecordPayload {
  * Apps Script /exec 응답에는 Access-Control-Allow-Origin: * 가 붙는다.
  * 따라서 기본은 cors 모드로 보내 "응답을 읽고" 성패를 실제로 판정한다.
  */
-async function postToWebApp(webhookUrl: string, payload: unknown): Promise<SyncResult> {
-  const body = JSON.stringify(payload);
+async function postToWebApp(webhookUrl: string, payload: object): Promise<SyncResult> {
+  // 접속 코드를 함께 보낸다 — 서버가 권한을 확인한다
+  const body = JSON.stringify(withAccessCode(payload));
   const headers = { 'Content-Type': 'text/plain;charset=utf-8' };
 
   try {
@@ -81,11 +118,23 @@ async function postToWebApp(webhookUrl: string, payload: unknown): Promise<SyncR
     }
 
     try {
-      const parsed = JSON.parse(text) as { status?: string; message?: string; scriptVersion?: number; photoIds?: unknown };
+      const parsed = JSON.parse(text) as {
+        status?: string;
+        code?: string;
+        message?: string;
+        scriptVersion?: number;
+        photoIds?: unknown;
+      };
       // 구버전 스크립트는 scriptVersion 을 응답하지 않는다 -> 1 로 간주
       const scriptVersion = Number(parsed.scriptVersion) || 1;
       if (parsed.status === 'error') {
-        return { success: false, verified: true, scriptVersion, message: parsed.message || '웹 앱에서 오류를 반환했습니다.' };
+        return {
+          success: false,
+          verified: true,
+          scriptVersion,
+          denied: parsed.code === 'forbidden',
+          message: parsed.message || '웹 앱에서 오류를 반환했습니다.',
+        };
       }
       return {
         success: true,
@@ -133,7 +182,10 @@ function pointsToText(points: CorePoint[] | undefined, pick: (p: CorePoint) => n
 function textToNumbers(text: unknown): number[] {
   return String(text ?? '')
     .split(/[/,·]/)
-    .map(part => Number(part.trim()))
+    .map(part => part.trim())
+    // 빈 칸은 숫자 0 이 아니라 '값 없음'이다 (Number('') 는 0 이 된다)
+    .filter(part => part !== '')
+    .map(Number)
     .filter(n => Number.isFinite(n));
 }
 
@@ -148,23 +200,37 @@ function toCorePoints(tempText: unknown, moistureText: unknown): CorePoint[] | u
 
 function toPayload({ record, previous, verdict }: AnnotatedRecord): RecordPayload {
   const delta = (a: number, b: number) => Number((a - b).toFixed(1));
+  const isInspection = record.recordType === 'inspection';
+
   return {
     recordKey: record.id,
     dateTime: `${record.date} ${record.time}`,
     ranchName: record.ranchName,
     location: record.location,
-    collectedKg: record.collectedKg,
-    coreTemp: record.coreTemp,
-    moisture: record.moisture,
-    ambientTemp: record.ambientTemp,
-    ambientHum: record.ambientHum,
-    coreTempDelta: previous ? delta(record.coreTemp, previous.coreTemp) : '',
-    moistureDelta: previous ? delta(record.moisture, previous.moisture) : '',
-    verdictTitle: verdict.title,
+    // 현장 점검은 측정값 없음 — 빈 문자열로 보내 시트에 0이 기록되지 않도록 한다
+    collectedKg: isInspection ? '' : record.collectedKg,
+    coreTemp: isInspection ? '' : record.coreTemp,
+    moisture: isInspection ? '' : record.moisture,
+    ambientTemp: isInspection ? '' : record.ambientTemp,
+    ambientHum: isInspection ? '' : record.ambientHum,
+    coreTempDelta: (isInspection || !previous) ? '' : delta(record.coreTemp, previous.coreTemp),
+    moistureDelta: (isInspection || !previous) ? '' : delta(record.moisture, previous.moisture),
+    // 현장 점검은 판정 없음 — 빈 문자열
+    verdictTitle: isInspection ? '' : verdict.title,
     notes: record.notes || '',
-    coreTempPoints: pointsToText(record.corePoints, p => p.coreTemp),
-    moisturePoints: pointsToText(record.corePoints, p => p.moisture),
+    coreTempPoints: isInspection ? '' : pointsToText(record.corePoints, p => p.coreTemp),
+    moisturePoints: isInspection ? '' : pointsToText(record.corePoints, p => p.moisture),
     photoIds: (record.photos ?? []).map(p => p.fileId),
+    workType: describeWorkType(record),
+    // 현장 점검에서는 신규 투입량(addedKg) 없음
+    addedKg: isInspection ? '' : (record.addedKg === undefined ? (record.collectedKg || '') : record.addedKg),
+    mixed: record.mixed === undefined ? '' : record.mixed ? MIXED_YES : MIXED_NO,
+    moldStatus: record.moldStatus ? MOLD_LABELS[record.moldStatus] : '',
+    odor: record.odor === undefined ? '' : record.odor ? ODOR_YES : ODOR_NO,
+    beddingUsedKg: getBeddingUsedKg(record) || '',
+    cycleId: record.cycleId ?? '',
+    // 서버가 목장 매니저의 저장을 현장 점검으로만 받는지 확인할 때 쓴다 (시트에는 남기지 않음)
+    recordType: record.recordType ?? '',
   };
 }
 
@@ -249,6 +315,13 @@ interface RawSheetRecord {
   photoIds?: string[];
   coreTempPoints?: string;
   moisturePoints?: string;
+  workType?: string;
+  addedKg?: number | string;
+  mixed?: string;
+  moldStatus?: string;
+  odor?: string;
+  beddingUsedKg?: number | string;
+  cycleId?: string;
 }
 
 /**
@@ -261,7 +334,7 @@ export async function loadFromGoogleSheets(
   const invalid = assertUrl(webhookUrl);
   if (invalid) return invalid;
 
-  const url = `${webhookUrl}${webhookUrl.includes('?') ? '&' : '?'}action=load`;
+  const url = appendAccessCode(`${webhookUrl}${webhookUrl.includes('?') ? '&' : '?'}action=load`);
 
   try {
     const res = await fetch(url, { method: 'GET', redirect: 'follow' });
@@ -280,7 +353,7 @@ export async function loadFromGoogleSheets(
       };
     }
 
-    let parsed: { status?: string; message?: string; scriptVersion?: number; records?: RawSheetRecord[] };
+    let parsed: { status?: string; code?: string; message?: string; scriptVersion?: number; records?: RawSheetRecord[] };
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -290,7 +363,13 @@ export async function loadFromGoogleSheets(
     const scriptVersion = Number(parsed.scriptVersion) || 1;
 
     if (parsed.status === 'error') {
-      return { success: false, verified: true, scriptVersion, message: parsed.message || '시트에서 오류를 반환했습니다.' };
+      return {
+        success: false,
+        verified: true,
+        scriptVersion,
+        denied: parsed.code === 'forbidden',
+        message: parsed.message || '시트에서 오류를 반환했습니다.',
+      };
     }
 
     // v5 이하 스크립트는 records 를 주지 않는다
@@ -325,8 +404,17 @@ export async function loadFromGoogleSheets(
           notes: r.notes || undefined,
           photos: toPhotos(r.photoIds),
           corePoints: toCorePoints(r.coreTempPoints, r.moisturePoints),
+          // v12 이하 탭에는 아래 칸이 없다. 빈 값은 undefined 로 두어 "기록 없음"으로 보이게 한다.
+          addedKg: toOptionalNumber(r.addedKg),
+          beddingUsedKg: toOptionalNumber(r.beddingUsedKg),
+          mixed: toOptionalBoolean(r.mixed, MIXED_YES, MIXED_NO),
+          moldStatus: parseMoldStatus(r.moldStatus),
+          odor: toOptionalBoolean(r.odor, ODOR_YES, ODOR_NO),
+          cycleId: String(r.cycleId || '').trim() || undefined,
         };
-      });
+      })
+      // 시트에는 기록 종류 칸이 없다 — 온도·함수율이 비어 있는 행은 현장 점검으로 본다
+      .map(record => ({ ...record, recordType: hasMeasurement(record) ? ('measurement' as const) : ('inspection' as const) }));
 
     return {
       success: true,

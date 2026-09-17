@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { MoreHorizontal, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { MoreMenu } from './MoreMenu';
+import { useAccess } from '../../contexts/AccessContext';
 
 interface AppHeaderProps {
   onOpenHelp: () => void;
@@ -11,6 +12,7 @@ interface AppHeaderProps {
 export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenHelp, onOpenAbout }) => {
   const { isDark, toggleTheme } = useTheme();
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const { managerRanch } = useAccess();
 
   return (
     <header className="md:hidden fixed top-0 left-0 right-0 z-40 pt-safe bg-white/85 dark:bg-[#121214]/90 backdrop-blur-2xl border-b border-black/5 dark:border-white/10 shadow-xs">
@@ -22,9 +24,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ onOpenHelp, onOpenAbout })
             alt="지구를 지키는 소소한 행동"
             className="w-8 h-8 object-contain shrink-0"
           />
-          <h1 className="font-bold text-[15px] text-[#1D1D1F] dark:text-[#F5F5F7] tracking-tight truncate">
-            커피박 부숙 관리
-          </h1>
+          <div className="min-w-0">
+            <h1 className="font-bold text-[15px] text-[#1D1D1F] dark:text-[#F5F5F7] tracking-tight truncate leading-tight">
+              커피박 부숙 관리
+            </h1>
+            {managerRanch && (
+              <span className="block text-[11px] font-semibold text-[#315C36] dark:text-[#34C759] truncate">
+                {managerRanch} 매니저
+              </span>
+            )}
+          </div>
         </div>
 
         {/* 우측: 테마 변경 + 더보기 버튼 */}

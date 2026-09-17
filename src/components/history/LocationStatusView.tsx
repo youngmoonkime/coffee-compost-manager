@@ -7,6 +7,7 @@ import { StatusBadge } from '../ui/StatusBadge';
 import { EmptyState } from '../ui/EmptyState';
 import { LocationDetail } from './LocationDetail';
 import { ScriptVersionNotice } from '../common/ScriptVersionNotice';
+import { useAccess } from '../../contexts/AccessContext';
 
 type StatusFilterType = 'all' | 'action_needed' | 'usable' | 'drying';
 
@@ -23,6 +24,7 @@ export const LocationStatusView: React.FC = () => {
     pendingCount,
   } = useCompost();
   const { showToast } = useToast();
+  const { isManager } = useAccess();
 
   const [statusFilter, setStatusFilter] = useState<StatusFilterType>('all');
   const [ranchFilter, setRanchFilter] = useState<string | null>(null);
@@ -103,7 +105,7 @@ export const LocationStatusView: React.FC = () => {
         </div>
       </div>
 
-      <ScriptVersionNotice className="mb-3" />
+      {!isManager && <ScriptVersionNotice className="mb-3" />}
 
       {pendingCount > 0 && (
         <div className="mb-3 rounded-2xl border border-[#FF9F0A]/30 bg-[#FF9F0A]/10 p-3 text-xs text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-2">
@@ -167,9 +169,13 @@ export const LocationStatusView: React.FC = () => {
         <EmptyState
           icon="location_on"
           title="아직 등록된 장소가 없습니다"
-          description="[측정] 탭에서 하역 장소와 측정값을 입력하면 이곳에서 장소별 상태를 모아볼 수 있습니다."
-          actionLabel="첫 측정 기록하기"
-          onAction={() => setActiveTab('monitoring')}
+          description={
+            isManager
+              ? '회사에서 이 목장의 커피박 투입을 기록하면 이곳에서 장소별 상태를 볼 수 있습니다.'
+              : '[측정] 탭에서 하역 장소와 측정값을 입력하면 이곳에서 장소별 상태를 모아볼 수 있습니다.'
+          }
+          actionLabel={isManager ? undefined : '첫 측정 기록하기'}
+          onAction={isManager ? undefined : () => setActiveTab('monitoring')}
         />
       ) : (
         <>
@@ -211,7 +217,7 @@ export const LocationStatusView: React.FC = () => {
 
                       <div className="flex items-baseline gap-2.5 mt-2.5">
                         <span className="font-display-metric text-2xl font-bold text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums">
-                          {summary.latest.moisture}%
+                          {summary.measured ? `${summary.latest.moisture}%` : '측정 없음'}
                         </span>
                         {diffMoisture !== undefined && (
                           <span
@@ -227,7 +233,7 @@ export const LocationStatusView: React.FC = () => {
                           </span>
                         )}
                         <span className="ml-auto text-xs text-[#6E6E73] dark:text-[#8E8E93] tabular-nums">
-                          심부 {summary.latest.coreTemp}℃
+                          심부 {summary.measured ? `${summary.latest.coreTemp}℃` : '—'}
                         </span>
                       </div>
 
@@ -283,7 +289,7 @@ export const LocationStatusView: React.FC = () => {
 
                     <div className="flex items-baseline gap-2 mt-2">
                       <span className="font-display-metric text-xl font-bold text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums">
-                        {summary.latest.moisture}%
+                        {summary.measured ? `${summary.latest.moisture}%` : '측정 없음'}
                       </span>
                       {diffMoisture !== undefined && (
                         <span
@@ -295,7 +301,7 @@ export const LocationStatusView: React.FC = () => {
                         </span>
                       )}
                       <span className="ml-auto text-xs text-[#6E6E73] dark:text-[#8E8E93] tabular-nums">
-                        심부 {summary.latest.coreTemp}℃
+                        심부 {summary.measured ? `${summary.latest.coreTemp}℃` : '—'}
                       </span>
                     </div>
 

@@ -2,6 +2,7 @@ import React from 'react';
 import type { PileSummary } from '../../utils/calculations';
 import { formatShortDate } from '../../utils/calculations';
 import { useCompost } from '../../contexts/CompostContext';
+import { useAccess } from '../../contexts/AccessContext';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -15,13 +16,14 @@ interface LocationDetailProps {
 }
 
 export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack }) => {
-  const { setActivePile, setActiveTab } = useCompost();
-  const { pile, latest, verdict, records, totalCollectedKg } = summary;
+  const { setMeasurePile, setActiveTab } = useCompost();
+  const { isManager } = useAccess();
+  const { pile, latest, verdict, records, allRecords, measured, lastVisitDate, totalCollectedKg } = summary;
   const previous = records[records.length - 2];
   const diffMoisture = previous ? Number((latest.moisture - previous.moisture).toFixed(1)) : undefined;
 
   const handleStartMeasurement = () => {
-    setActivePile(pile);
+    setMeasurePile(pile);
     setActiveTab('monitoring');
   };
 
@@ -53,17 +55,24 @@ export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack 
 
         {/* 함수율 & 심부 온도 메트릭 */}
         <div className="flex items-baseline justify-between mt-4">
-          <MetricDisplay
-            label="현재 함수율"
-            value={latest.moisture}
-            unit="%"
-            diff={diffMoisture}
-            size="lg"
-          />
+          {measured ? (
+            <MetricDisplay
+              label="현재 함수율"
+              value={latest.moisture}
+              unit="%"
+              diff={diffMoisture}
+              size="lg"
+            />
+          ) : (
+            <div>
+              <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93] block mb-1">현재 함수율</span>
+              <span className="text-sm font-semibold text-[#6E6E73] dark:text-[#8E8E93]">아직 측정 없음</span>
+            </div>
+          )}
           <div className="text-right">
             <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93] block mb-1">심부 온도</span>
             <span className="font-display-metric text-2xl font-bold text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums">
-              {latest.coreTemp}℃
+              {measured ? `${latest.coreTemp}℃` : '—'}
             </span>
           </div>
         </div>
@@ -93,7 +102,7 @@ export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack 
           <div>
             <span className="text-[11px] text-[#6E6E73] dark:text-[#8E8E93] block">최근 기록</span>
             <span className="text-xs font-bold text-[#1D1D1F] dark:text-[#F5F5F7] mt-0.5 block">
-              {formatShortDate(latest.date)}
+              {formatShortDate(lastVisitDate)}
             </span>
           </div>
           <div>
@@ -111,7 +120,8 @@ export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack 
         </div>
       </Card>
 
-      {/* 2. 빠른 측정 CTA 버튼 */}
+      {/* 2. 빠른 측정 CTA 버튼 (측정은 회사가 한다) */}
+      {!isManager && (
       <Button
         variant="primary"
         size="lg"
@@ -121,6 +131,7 @@ export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack 
       >
         이 장소 바로 측정하기
       </Button>
+      )}
 
       {/* 3. 함수율 추이 차트 (MoistureChart) */}
       <div className="space-y-2">
@@ -133,9 +144,9 @@ export const LocationDetail: React.FC<LocationDetailProps> = ({ summary, onBack 
       {/* 4. 기록 이력 리스트 (PileRecordList) */}
       <div className="space-y-2">
         <h3 className="text-xs font-bold text-[#6E6E73] dark:text-[#8E8E93] px-1">
-          측정 기록 이력 ({records.length}건)
+          기록 이력 ({allRecords.length}건 · 측정 {records.length}건)
         </h3>
-        <PileRecordList records={records} />
+        <PileRecordList records={allRecords} />
       </div>
     </div>
   );

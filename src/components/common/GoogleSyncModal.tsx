@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import { useToast } from '../../contexts/ToastContext';
 import { GOOGLE_APPS_SCRIPT_CODE, GOOGLE_SHEETS_GUIDE_STEPS } from '../../constants/googleScriptTemplate';
-import { SHEET_WEBHOOK_URL } from '../../constants/defaultData';
+import { COMPOST_GAS_API_URL } from '../../constants/defaultData';
 import { testGoogleSheetsConnection, REQUIRED_SCRIPT_VERSION } from '../../services/googleSheetsService';
 import { getCurrentDateTimeString } from '../../utils/calculations';
 
@@ -33,7 +33,7 @@ export const GoogleSyncModal: React.FC = () => {
 
   const handleTestPing = async () => {
     setIsTesting(true);
-    const res = await testGoogleSheetsConnection(SHEET_WEBHOOK_URL);
+    const res = await testGoogleSheetsConnection(COMPOST_GAS_API_URL);
     setIsTesting(false);
 
     if (res.success) {
@@ -146,8 +146,8 @@ export const GoogleSyncModal: React.FC = () => {
                   배포된 스크립트가 구버전입니다 (v{googleConfig.scriptVersion} → v{REQUIRED_SCRIPT_VERSION} 필요)
                 </span>
                 <span className="font-caption text-[11px] block mt-0.5 leading-relaxed">
-                  최신 기능(목장별 탭 분리, 파봉 사진 업로드)이나 보안 수정이 적용되지 않습니다. 아래 [설정 가이드]에서 코드를
-                  복사해 붙여넣고, <b>setupPhotoFolder 실행(권한 허용)</b> 후 <b>[배포] → [배포 관리] → 연필 → 버전
+                  최신 기능(AI 리포트·설명, 목장별 탭, 파봉 사진)이나 보안 수정이 적용되지 않습니다. 아래 [설정 가이드]에서 코드를
+                  복사해 붙여넣고, <b>setupPhotoFolder · setupAiAccess 실행(권한 허용)</b> 후 <b>[배포] → [배포 관리] → 연필 → 버전
                   [새 버전]</b>으로 재배포해주세요. (기존 시트 내용은 지워지지 않습니다)
                 </span>
                 <button
@@ -197,7 +197,7 @@ export const GoogleSyncModal: React.FC = () => {
                 <div className="flex gap-2">
                   <input
                     type="url"
-                    value={SHEET_WEBHOOK_URL}
+                    value={COMPOST_GAS_API_URL}
                     readOnly
                     aria-readonly="true"
                     onFocus={(e) => e.currentTarget.select()}

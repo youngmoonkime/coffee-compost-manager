@@ -1,29 +1,41 @@
 import React from 'react';
 import {
   Sun,
+  ClipboardCheck,
   CirclePlus,
   LayoutGrid,
   Sparkles,
+  Bot,
+  BarChart3,
   Settings,
   Moon,
 } from 'lucide-react';
 import { useCompost } from '../../contexts/CompostContext';
+import { useAccess } from '../../contexts/AccessContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { ActiveTab } from '../../types';
 
 export const DesktopSidebar: React.FC = () => {
-  const { activeTab, setActiveTab, setHistoryPileKey, isSheetBackend, pendingCount } =
+  const { activeTab, setActiveTab, setHistoryPileKey, setRanchPicked, isSheetBackend, pendingCount } =
     useCompost();
   const { isDark, toggleTheme } = useTheme();
 
-  const fieldNavItems: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
-    { id: 'today', label: '오늘', icon: Sun },
+  const { isManager, managerRanch } = useAccess();
+
+  const allFieldNavItems: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
+    { id: 'today', label: '현장점검', icon: ClipboardCheck },
     { id: 'monitoring', label: '측정 기록', icon: CirclePlus },
     { id: 'history', label: '장소 현황', icon: LayoutGrid },
   ];
+  // 목장 매니저: 현장점검 단일 탭만
+  const fieldNavItems = isManager
+    ? [{ id: 'today' as ActiveTab, label: '현장점검', icon: ClipboardCheck }]
+    : allFieldNavItems;
 
   const analysisNavItems: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
     { id: 'simulation', label: '축사 시뮬레이션', icon: Sparkles },
+    { id: 'assistant', label: '지소행 AI 어시스턴트', icon: Bot },
+    { id: 'impact', label: '수거 & 임팩트', icon: BarChart3 },
   ];
 
   const managementNavItems: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
@@ -48,6 +60,9 @@ export const DesktopSidebar: React.FC = () => {
             <h1 className="font-bold text-[16px] text-[#1D1D1F] dark:text-[#F5F5F7] tracking-tight leading-tight">
               커피박 부숙 관리
             </h1>
+            {managerRanch && (
+              <span className="text-[11px] font-semibold text-[#315C36] dark:text-[#34C759]">{managerRanch} 매니저</span>
+            )}
           </div>
         </div>
       </div>
@@ -61,7 +76,8 @@ export const DesktopSidebar: React.FC = () => {
           </span>
           <div className="space-y-1">
             {fieldNavItems.map(item => {
-              const isActive = activeTab === item.id;
+              const isActive =
+                activeTab === item.id || (item.id === 'today' && activeTab === 'inspection');
               const Icon = item.icon;
               return (
                 <button
@@ -69,6 +85,7 @@ export const DesktopSidebar: React.FC = () => {
                   type="button"
                   onClick={() => {
                     if (item.id === 'history') setHistoryPileKey(null);
+                    if (item.id === 'today') setRanchPicked(false);
                     setActiveTab(item.id);
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-all ${
@@ -90,6 +107,8 @@ export const DesktopSidebar: React.FC = () => {
           </div>
         </div>
 
+        {!isManager && (
+        <>
         {/* 분석 그룹 */}
         <div>
           <span className="text-[11px] font-bold text-[#8E8E93] dark:text-[#6E6E73] px-3 mb-1.5 block uppercase tracking-wider">
@@ -117,6 +136,9 @@ export const DesktopSidebar: React.FC = () => {
             })}
           </div>
         </div>
+
+        </>
+        )}
 
         {/* 관리 그룹 */}
         <div>

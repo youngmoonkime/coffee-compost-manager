@@ -1,6 +1,7 @@
 import React from 'react';
-import { Sun, CirclePlus, LayoutGrid } from 'lucide-react';
+import { ClipboardCheck, CirclePlus, LayoutGrid } from 'lucide-react';
 import { useCompost } from '../../contexts/CompostContext';
+import { useAccess } from '../../contexts/AccessContext';
 import type { ActiveTab } from '../../types';
 
 interface NavItem {
@@ -10,13 +11,19 @@ interface NavItem {
 }
 
 export const MobileTabBar: React.FC = () => {
-  const { activeTab, setActiveTab, setHistoryPileKey } = useCompost();
+  const { activeTab, setActiveTab, setHistoryPileKey, setRanchPicked } = useCompost();
 
-  const navItems: NavItem[] = [
-    { id: 'today', label: '오늘', icon: Sun },
+  const { isManager } = useAccess();
+
+  const allItems: NavItem[] = [
+    { id: 'today', label: '현장점검', icon: ClipboardCheck },
     { id: 'monitoring', label: '측정', icon: CirclePlus },
     { id: 'history', label: '현황', icon: LayoutGrid },
   ];
+  // 목장 매니저는 현장점검 단일 화면으로 운영하므로 모바일 하단 탭바 불필요
+  if (isManager) return null;
+
+  const navItems = allItems;
 
   return (
     <nav
@@ -26,7 +33,7 @@ export const MobileTabBar: React.FC = () => {
     >
       <div className="flex justify-around items-center h-16 px-4 max-w-md mx-auto">
         {navItems.map(item => {
-          const isActive = activeTab === item.id;
+          const isActive = activeTab === item.id || (item.id === 'today' && activeTab === 'inspection');
           const IconComponent = item.icon;
 
           return (
@@ -34,6 +41,7 @@ export const MobileTabBar: React.FC = () => {
               key={item.id}
               onClick={() => {
                 if (item.id === 'history') setHistoryPileKey(null);
+                if (item.id === 'today') setRanchPicked(false);
                 setActiveTab(item.id);
               }}
               className={`flex flex-col items-center justify-center flex-1 min-h-[48px] py-1 transition-all active:scale-95 ${

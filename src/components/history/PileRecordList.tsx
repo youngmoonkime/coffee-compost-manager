@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
+import { useAccess } from '../../contexts/AccessContext';
 import { useToast } from '../../contexts/ToastContext';
-import { annotateRecords, formatShortDate } from '../../utils/calculations';
+import { annotateRecords, formatShortDate, hasMeasurement } from '../../utils/calculations';
+import { MOLD_LABELS } from '../../utils/fieldOps';
 import { VERDICT_BADGES } from '../../constants/verdictBadges';
 import { getDriveThumbnailUrl } from '../../utils/photos';
 import type { MeasurementRecord, RecordPhoto } from '../../types';
@@ -40,6 +42,7 @@ function formatSigned(value: number): string {
 /** 한 장소의 기록 목록 (최신순) — 사진 보기·기록 삭제 */
 export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ records }) => {
   const { settings, deleteRecord } = useCompost();
+  const { isManager } = useAccess();
   const { showToast } = useToast();
 
   const rows = useMemo(() => annotateRecords(records, settings).reverse(), [records, settings]);
@@ -74,8 +77,16 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
         <div className="space-y-1.5">
           {rows.map(({ record, previous, verdict }, idx) => {
             const badge = VERDICT_BADGES[verdict.type];
-            const moistureDelta = previous ? record.moisture - previous.moisture : null;
-            const tempDelta = previous ? record.coreTemp - previous.coreTemp : null;
+            const measured = hasMeasurement(record);
+            const moistureDelta = measured && previous ? record.moisture - previous.moisture : null;
+            const tempDelta = measured && previous ? record.coreTemp - previous.coreTemp : null;
+            // 현장 점검 기록 — 측정값 대신 점검 내용을 보여 준다
+            const inspectionParts = [
+              record.mixed === undefined ? null : record.mixed ? '혼합 완료' : '혼합 안 함',
+              record.moldStatus ? `곰팡이 ${MOLD_LABELS[record.moldStatus]}` : null,
+              record.odor === undefined ? null : record.odor ? '악취 있음' : '악취 없음',
+              (record.beddingUsedKg ?? 0) > 0 ? `깔개 ${record.beddingUsedKg!.toLocaleString('ko-KR')}kg` : null,
+            ].filter(Boolean);
 
             return (
               <div
@@ -97,6 +108,8 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                   </div>
 
                   <div className="min-w-0 flex-1">
+                    {measured ? (
+                    <>
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-label-sm text-[13px] text-on-surface dark:text-[#F5F5F7] font-bold whitespace-nowrap">
                         함수율 {record.moisture}%
@@ -122,6 +135,17 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                     <span className="font-caption text-[11px] text-outline dark:text-[#8E8E93] block mt-0.5 truncate">
                       수거 {record.collectedKg.toLocaleString('ko-KR')}kg · 외기 {record.ambientTemp}℃ · 습도 {record.ambientHum}%
                     </span>
+                    </>
+                    ) : (
+                    <>
+                    <span className="font-label-sm text-[13px] text-on-surface dark:text-[#F5F5F7] font-bold whitespace-nowrap">
+                      현장 점검
+                    </span>
+                    <span className="font-caption text-[11px] text-outline dark:text-[#8E8E93] block mt-0.5 truncate">
+                      {inspectionParts.length > 0 ? inspectionParts.join(' · ') : '점검 내용 없음'}
+                    </span>
+                    </>
+                    )}
                     {record.notes && (
                       <span className="font-caption text-[11px] text-secondary dark:text-[#d8dbd2] mt-1 flex items-start gap-1" title={record.notes}>
                         <span className="material-symbols-outlined text-[13px] shrink-0 mt-px">sticky_note_2</span>
@@ -145,6 +169,7 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                   <span className={`px-2 py-0.5 rounded-full font-caption text-[10.5px] font-bold whitespace-nowrap ${badge.className}`}>
                     {badge.text}
                   </span>
+                  {!isManager && (
                   <button
                     onClick={() => handleDelete(record.id, record.date)}
                     className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-1 text-outline dark:text-[#8E8E93] hover:text-error dark:hover:text-[#FF453A] rounded-md active:scale-95"
@@ -153,6 +178,7 @@ export const PileRecordList: React.FC<{ records: MeasurementRecord[] }> = ({ rec
                   >
                     <span className="material-symbols-outlined text-[16px]">delete</span>
                   </button>
+                  )}
                 </div>
               </div>
             );

@@ -13,6 +13,7 @@ interface MeasurementResultProps {
   photosUploaded: number;
   photosPending: number;
   previousRecord?: MeasurementRecord;
+  mode: 'inspection' | 'measurement';
   onMeasureAnother: () => void;
   onViewLocationDetail: () => void;
 }
@@ -34,6 +35,7 @@ export const MeasurementResult: React.FC<MeasurementResultProps> = ({
   photosUploaded,
   photosPending,
   previousRecord,
+  mode,
   onMeasureAnother,
   onViewLocationDetail,
 }) => {
@@ -47,7 +49,9 @@ export const MeasurementResult: React.FC<MeasurementResultProps> = ({
         <div className="w-12 h-12 rounded-full bg-[#E7F0E6] dark:bg-[#315C36]/30 text-[#315C36] dark:text-[#34C759] flex items-center justify-center mx-auto mb-2 shadow-xs">
           <span className="material-symbols-outlined text-[28px]">check</span>
         </div>
-        <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">측정 완료</span>
+        <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">
+          {mode === 'measurement' ? '투입 기록 저장 완료' : '점검 저장 완료'}
+        </span>
         <h2 className="text-xl sm:text-2xl font-bold text-[#1D1D1F] dark:text-[#F5F5F7] mt-0.5">
           {record.ranchName} · {record.location}
         </h2>
@@ -60,22 +64,39 @@ export const MeasurementResult: React.FC<MeasurementResultProps> = ({
           <StatusBadge type={verdict.type} />
         </div>
 
-        <div className="flex items-baseline justify-between gap-2">
-          <MetricDisplay
-            label="현재 함수율"
-            value={record.moisture}
-            unit="%"
-            diff={diffMoisture}
-            size="lg"
-          />
+        {mode === 'measurement' ? (
+          <div className="flex items-baseline justify-between gap-2">
+            <MetricDisplay
+              label="현재 함수율"
+              value={record.moisture}
+              unit="%"
+              diff={diffMoisture}
+              size="lg"
+            />
 
-          <div className="text-right">
-            <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93] block mb-1">심부 온도</span>
-            <span className="font-display-metric text-xl font-bold text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums">
-              {record.coreTemp}℃
-            </span>
+            <div className="text-right">
+              <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93] block mb-1">심부 온도</span>
+              <span className="font-display-metric text-xl font-bold text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums">
+                {record.coreTemp}℃
+              </span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2 pt-1 pb-1">
+            <div className="p-2.5 rounded-xl bg-[#F2F2F7] dark:bg-[#2C2C2E]">
+              <span className="text-[11px] text-[#6E6E73] dark:text-[#8E8E93] block">혼합 작업</span>
+              <span className="text-xs font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                {record.mixed ? '✅ 혼합 완료' : '미실시'}
+              </span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-[#F2F2F7] dark:bg-[#2C2C2E]">
+              <span className="text-[11px] text-[#6E6E73] dark:text-[#8E8E93] block">곰팡이 / 냄새</span>
+              <span className="text-xs font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                {record.moldColor || (record.hasMold ? '곰팡이 관찰' : '미발생')} / {record.odor ? '악취' : '정상'}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* 권장 행동 안내 박스 */}
         <div className="mt-4 p-3 rounded-xl bg-[#F2F2F7] dark:bg-[#2C2C2E] flex items-start gap-2.5">
@@ -119,10 +140,16 @@ export const MeasurementResult: React.FC<MeasurementResultProps> = ({
       {/* 4. 액션 버튼 */}
       <div className="space-y-2 pt-2">
         <Button variant="primary" size="lg" icon="refresh" onClick={onMeasureAnother} fullWidth>
-          다른 장소 측정하기
+          {mode === 'measurement' ? '새 투입 기록하기' : '새 점검 기록하기'}
         </Button>
-        <Button variant="secondary" size="lg" icon="dataset" onClick={onViewLocationDetail} fullWidth>
-          이 장소 상세 보기
+        <Button
+          variant="secondary"
+          size="lg"
+          icon={mode === 'inspection' ? 'fact_check' : 'dataset'}
+          onClick={onViewLocationDetail}
+          fullWidth
+        >
+          {mode === 'inspection' ? '현장 점검 메인으로 돌아가기' : '이 장소 상세 보기'}
         </Button>
       </div>
     </div>

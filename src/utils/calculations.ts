@@ -130,6 +130,19 @@ export function compareRecords(a: MeasurementRecord, b: MeasurementRecord): numb
   return a.date.localeCompare(b.date) || a.time.localeCompare(b.time);
 }
 
+/**
+ * 심부 온도·함수율을 잰 기록인지.
+ * 현장 점검 기록은 이 값을 재지 않는다 (시트에서도 빈칸 → 앱에서는 0 으로 읽힌다).
+ * 판정·직전 대비·그래프·측정 횟수는 측정 기록만 쓴다.
+ */
+export function hasMeasurement(record: { coreTemp: number; moisture: number; corePoints?: CorePoint[] }): boolean {
+  return (
+    record.moisture > 0 ||
+    record.coreTemp > 0 ||
+    (record.corePoints ?? []).some(point => point.moisture > 0 || point.coreTemp > 0)
+  );
+}
+
 /** 한 장소의 기록을 오래된 순으로 */
 export function getPileRecords(records: MeasurementRecord[], pile: Pile): MeasurementRecord[] {
   const key = getPileKey(pile);
@@ -139,7 +152,7 @@ export function getPileRecords(records: MeasurementRecord[], pile: Pile): Measur
 /* ───────────────────────── 판정 ───────────────────────── */
 
 /** 부숙 기간 동안 반복하는 혼합 작업 안내 */
-export const MIXING_GUIDE = '1주일에 2~3회, 상황에 따라 혼합해주세요.';
+export const MIXING_GUIDE = '1주일에 2~3회, 기존 커피박을 삽으로 한 번씩 뒤집어 섞어주세요.';
 
 /** 사용 시점 예측에 쓰는 최근 기록 수 */
 const TREND_MAX_POINTS = 4;
@@ -176,18 +189,34 @@ function getWeeklyDryingRate(points: { date: string; moisture: number }[]): numb
  *
  * - 첫 기록은 판정하지 않는다. 막 하역한 커피박에 조치를 띄우면 오해를 산다.
  * - 과열·과습이면 혼합이 먼저다.
- * - 그 외에는 함수율이 깔개 사용 기준 범위(기본 30~40%)에 들었는지로 본다.
+ * - 그 외에는 함수율이 깔개 현장 관찰 범위(기본 20~30%)에 들었는지로 본다.
  *   기준보다 높으면 최근 감소 속도로 사용 가능 시점을 예측한다.
  */
 export function evaluateRecord(
-  current: { date: string; coreTemp: number; moisture: number },
+  current: { date: string; coreTemp: number; moisture: number; corePoints?: CorePoint[]; recordType?: string },
   earlier: MeasurementRecord[],
   settings: CompostSettings
 ): VerdictInfo {
   const { coreTemp, moisture } = current;
   const min = settings.usableMoistureMin;
   const max = settings.usableMoistureMax;
-  const previous = earlier[earlier.length - 1];
+  // 비교·예측은 측정 기록끼리만 — 사이에 낀 현장 점검(값 0)과 비교하면 안 된다
+  const measuredEarlier = earlier.filter(hasMeasurement);
+  const previous = measuredEarlier[measuredEarlier.length - 1];
+
+  // 측정값이 없는 기록(현장 점검)은 판정하지 않는다
+  if (!hasMeasurement(current)) {
+    return {
+      type: 'first',
+      title: '현장 점검 완료',
+      subtitle: '현장 육안 점검이 기록되었습니다. 혼합·곰팡이·악취 상태를 확인했습니다.',
+      action: MIXING_GUIDE,
+      icon: 'fact_check',
+      bannerClass: 'bg-secondary-container text-on-secondary-container border border-secondary/20',
+      titleClass: 'text-on-secondary-container font-bold',
+      iconClass: 'text-secondary',
+    };
+  }
 
   if (!previous) {
     return {
@@ -234,9 +263,9 @@ export function evaluateRecord(
   if (moisture >= min && moisture <= max) {
     return {
       type: 'usable',
-      title: '깔개 사용 가능',
-      subtitle: `함수율 ${moisture}% (사용 기준 ${min}~${max}%) — ${trend}`,
-      action: '목장 깔개로 사용할 수 있습니다.',
+      title: '깔개 사용 후보',
+      subtitle: `함수율 ${moisture}% (현장 관찰 기준 ${min}~${max}%) — ${trend}`,
+      action: '더미 상태를 눈으로 확인한 뒤 깔개로 써보세요.',
       icon: 'task_alt',
       bannerClass: 'bg-primary-fixed text-on-primary-fixed border border-primary/20',
       titleClass: 'text-primary font-bold',
@@ -248,7 +277,7 @@ export function evaluateRecord(
     return {
       type: 'too_dry',
       title: '기준보다 건조',
-      subtitle: `함수율 ${moisture}% (사용 기준 ${min}~${max}%) — ${trend}`,
+      subtitle: `함수율 ${moisture}% (현장 관찰 기준 ${min}~${max}%) — ${trend}`,
       action: '더미 상태를 확인한 뒤 깔개로 사용해주세요.',
       icon: 'water_drop',
       bannerClass: 'bg-surface-container-high text-on-surface border border-outline-variant/40',
@@ -258,7 +287,7 @@ export function evaluateRecord(
   }
 
   // 함수율이 사용 기준보다 높다 — 최근 감소 속도로 사용 가능 시점을 예측한다
-  const rate = getWeeklyDryingRate([...earlier, current]);
+  const rate = getWeeklyDryingRate([...measuredEarlier, current]);
   let timing: string | undefined;
   if (rate !== null) {
     const weeksNeeded = (moisture - max) / rate;
@@ -272,7 +301,7 @@ export function evaluateRecord(
     type: 'drying',
     title: '부숙 진행 중',
     subtitle:
-      `함수율 ${moisture}% (사용 기준 ${max}% 이하까지 ${Number((moisture - max).toFixed(1))}%p) — ${trend}` +
+      `함수율 ${moisture}% (현장 관찰 기준 ${max}% 이하까지 ${Number((moisture - max).toFixed(1))}%p) — ${trend}` +
       (rate === null ? ' · 함수율이 줄지 않았습니다.' : ''),
     action: MIXING_GUIDE,
     timing,
@@ -285,7 +314,7 @@ export function evaluateRecord(
 
 export interface AnnotatedRecord {
   record: MeasurementRecord;
-  /** 같은 장소의 직전 기록 */
+  /** 같은 장소의 직전 측정 기록 (현장 점검 기록이면 비교하지 않아 없음) */
   previous?: MeasurementRecord;
   verdict: VerdictInfo;
 }
@@ -304,7 +333,8 @@ export function annotateRecords(records: MeasurementRecord[], settings: CompostS
   for (const list of byPile.values()) {
     list.forEach((record, i) => {
       const earlier = list.slice(0, i);
-      out.push({ record, previous: earlier[earlier.length - 1], verdict: evaluateRecord(record, earlier, settings) });
+      const previous = hasMeasurement(record) ? earlier.filter(hasMeasurement).pop() : undefined;
+      out.push({ record, previous, verdict: evaluateRecord(record, earlier, settings) });
     });
   }
   return out.sort((a, b) => compareRecords(a.record, b.record));
@@ -313,10 +343,17 @@ export function annotateRecords(records: MeasurementRecord[], settings: CompostS
 export interface PileSummary {
   key: string;
   pile: Pile;
-  /** 오래된 순 */
+  /** 측정 기록만, 오래된 순 — 그래프·측정 횟수·직전 대비에 쓴다 */
   records: MeasurementRecord[];
+  /** 현장 점검까지 모든 기록, 오래된 순 — 기록 이력에 쓴다 */
+  allRecords: MeasurementRecord[];
+  /** 최신 측정 기록 (측정이 없으면 최신 기록) */
   latest: MeasurementRecord;
-  /** 최신 기록의 판정 */
+  /** 측정 기록이 하나라도 있는지 */
+  measured: boolean;
+  /** 마지막으로 기록(측정·점검)한 날 */
+  lastVisitDate: string;
+  /** 최신 측정의 판정 */
   verdict: VerdictInfo;
   totalCollectedKg: number;
 }
@@ -332,17 +369,22 @@ export function summarizePiles(records: MeasurementRecord[], settings: CompostSe
   return [...byPile.entries()]
     .map(([key, list]) => {
       const sorted = list.sort(compareRecords);
-      const latest = sorted[sorted.length - 1];
+      const measuredList = sorted.filter(hasMeasurement);
+      const lastVisit = sorted[sorted.length - 1];
+      const latest = measuredList[measuredList.length - 1] ?? lastVisit;
       return {
         key,
-        pile: { ranchName: latest.ranchName, location: latest.location },
-        records: sorted,
+        pile: { ranchName: lastVisit.ranchName, location: lastVisit.location },
+        records: measuredList,
+        allRecords: sorted,
         latest,
-        verdict: evaluateRecord(latest, sorted.slice(0, -1), settings),
+        measured: measuredList.length > 0,
+        lastVisitDate: lastVisit.date,
+        verdict: evaluateRecord(latest, measuredList.slice(0, -1), settings),
         totalCollectedKg: sorted.reduce((sum, r) => sum + (r.collectedKg || 0), 0),
       };
     })
-    .sort((a, b) => compareRecords(b.latest, a.latest));
+    .sort((a, b) => b.lastVisitDate.localeCompare(a.lastVisitDate) || compareRecords(b.latest, a.latest));
 }
 
 /** 날짜가 속한 주(월~일)에 하역한 커피박 합계 — 모든 장소 */

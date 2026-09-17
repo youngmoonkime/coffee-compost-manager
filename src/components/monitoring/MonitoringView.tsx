@@ -7,7 +7,7 @@ import { MeasurementFlow } from '../measurement/MeasurementFlow';
  */
 export const MonitoringView: React.FC = () => (
   <div className="flex flex-col w-full pb-8">
-    <MeasurementFlow />
+    <MeasurementFlow mode="measurement" />
   </div>
 );
 
