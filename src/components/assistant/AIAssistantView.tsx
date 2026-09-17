@@ -302,9 +302,10 @@ export const AIAssistantView: React.FC = () => {
         <TaskModal
           title={`${period.label} 수거 & 임팩트 대시보드`}
           subtitle="Google Sheets 수거관리 시트 실측 데이터"
+          maxWidth="4xl"
           onClose={() => setShowDashboardModal(false)}
         >
-          <div className="max-h-[75vh] overflow-y-auto px-1">
+          <div className="max-h-[78vh] overflow-y-auto px-1 py-1">
             <CollectionImpactDashboard year={period.year} month={period.month} embedded />
           </div>
         </TaskModal>

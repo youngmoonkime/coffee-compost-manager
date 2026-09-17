@@ -12,6 +12,13 @@
   display: grid;
   gap: 20px;
   padding-bottom: 40px;
+  container-type: inline-size;
+  container-name: collection-impact;
+}
+
+.collection-impact--embedded {
+  gap: 16px;
+  padding-bottom: 16px;
 }
 
 /* ── 다크 모드 테마 변수 ── */
@@ -275,14 +282,26 @@ html.dark .collection-impact {
 .collection-impact__card {
   background: var(--ci-surface);
   border: 1px solid var(--ci-border);
-  border-radius: 22px;
+  border-radius: 20px;
   box-shadow: var(--ci-shadow);
+  min-width: 0;
 }
 
 .collection-impact__metric {
-  display: grid;
-  min-height: 190px;
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 160px;
+  padding: 18px 20px;
+  word-break: keep-all;
+}
+
+.collection-impact__metric-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .collection-impact__metric--primary {
@@ -303,22 +322,35 @@ html.dark .collection-impact {
 }
 
 .collection-impact__metric p {
-  align-self: end;
   color: var(--ci-muted);
-  font-size: 14px;
-  margin: 20px 0 5px;
+  font-size: 13px;
+  font-weight: 500;
+  margin: 12px 0 4px;
 }
 
-.collection-impact__metric strong {
+.collection-impact__metric strong,
+.collection-impact__metric-val {
   color: var(--ci-text);
-  font-size: clamp(30px, 3vw, 44px);
+  font-size: clamp(24px, 3.2cqi, 38px);
   letter-spacing: -.045em;
-  line-height: 1;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.collection-impact__metric-val--text {
+  font-size: clamp(18px, 2.4cqi, 28px);
+  font-weight: 800;
 }
 
 .collection-impact__metric small {
   color: var(--ci-muted);
-  margin-top: 8px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  word-break: keep-all;
 }
 
 .collection-impact__metric--primary p,
@@ -343,26 +375,35 @@ html.dark .collection-impact {
 }
 
 .collection-impact__card-head {
-  align-items: center;
+  align-items: baseline;
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 10px;
   justify-content: space-between;
-  margin-bottom: 22px;
+  margin-bottom: 20px;
 }
 
 .collection-impact__card-head h3 {
   color: var(--ci-text);
-  font-size: 19px;
-  margin: 7px 0 0;
+  font-size: 18px;
+  font-weight: 700;
+  margin: 6px 0 0;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 
-.collection-impact__card-head > strong {
+.collection-impact__card-head > strong,
+.collection-impact__card-total {
   color: var(--ci-text);
-  font-size: 20px;
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .collection-impact__card-head small {
   color: var(--ci-muted);
+  font-size: 12px;
 }
 
 .collection-impact__week-chart {
@@ -490,13 +531,287 @@ html.dark .collection-impact {
   overflow: hidden;
 }
 
+/* ── 뷰 모드 전환 버튼 (카드형 / 표형) ── */
+.collection-impact__view-switcher {
+  display: inline-flex;
+  align-items: center;
+  background: var(--ci-soft);
+  padding: 3px;
+  border-radius: 999px;
+  gap: 2px;
+}
+
+.collection-impact__view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--ci-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: auto;
+  line-height: 1.3;
+}
+
+.collection-impact__view-btn:hover {
+  color: var(--ci-text);
+}
+
+.collection-impact__view-btn.active {
+  background: var(--ci-surface);
+  color: var(--ci-text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.dark .collection-impact__view-btn.active {
+  background: #3a3a3c;
+  color: #f5f5f7;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+/* ── 검색 및 툴바 ── */
+.collection-impact__store-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.collection-impact__search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--ci-soft);
+  border: 1px solid var(--ci-border);
+  border-radius: 12px;
+  padding: 0 10px;
+  height: 36px;
+  flex: 1;
+  max-width: 320px;
+  min-width: 170px;
+  transition: border-color 0.15s ease;
+}
+
+.collection-impact__search-box:focus-within {
+  border-color: var(--ci-green);
+}
+
+.collection-impact__search-icon {
+  color: var(--ci-muted);
+  shrink-0: 0;
+}
+
+.collection-impact__search-input {
+  border: 0;
+  background: transparent;
+  color: var(--ci-text);
+  font-size: 12.5px;
+  width: 100%;
+  outline: none;
+}
+
+.collection-impact__search-clear {
+  border: 0;
+  background: transparent;
+  color: var(--ci-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.collection-impact__store-count {
+  font-size: 11.5px;
+  color: var(--ci-muted);
+  font-weight: 600;
+}
+
+/* ── 1. 모바일 최적화 카드형 뷰 (주차별 수거량이 100% 한눈에 보임) ── */
+.collection-impact__store-cards {
+  display: grid;
+  gap: 9px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.collection-impact__store-card {
+  background: var(--ci-soft);
+  border: 1px solid var(--ci-border);
+  border-radius: 15px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform 0.1s ease;
+}
+
+.dark .collection-impact__store-card {
+  background: #252528;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.collection-impact__store-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.collection-impact__store-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.collection-impact__store-no {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--ci-muted);
+  background: var(--ci-surface);
+  border: 1px solid var(--ci-border);
+  border-radius: 6px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.collection-impact__store-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ci-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-impact__store-total-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-shrink: 0;
+  background: var(--ci-green-soft);
+  border-radius: 8px;
+  padding: 3px 8px;
+}
+
+.collection-impact__store-total-badge .total-label {
+  font-size: 10px;
+  color: var(--ci-green);
+  font-weight: 600;
+}
+
+.collection-impact__store-total-badge .total-val {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--ci-green);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 5개 주차 가로 균등 칩 그리드 */
+.collection-impact__store-weeks {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  width: 100%;
+}
+
+.collection-impact__store-week-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 2px;
+  border-radius: 8px;
+  text-align: center;
+  background: var(--ci-surface);
+  border: 1px solid var(--ci-border);
+  min-width: 0;
+}
+
+.collection-impact__store-week-chip .week-label {
+  font-size: 9.5px;
+  color: var(--ci-muted);
+  font-weight: 600;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.collection-impact__store-week-chip .week-val {
+  font-size: 11px;
+  color: var(--ci-text);
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.collection-impact__store-week-chip.has-value {
+  border-color: rgba(49, 92, 54, 0.25);
+  background: rgba(49, 92, 54, 0.07);
+}
+
+.collection-impact__store-week-chip.has-value .week-val {
+  color: var(--ci-green);
+}
+
+.dark .collection-impact__store-week-chip.has-value {
+  border-color: rgba(52, 199, 89, 0.3);
+  background: rgba(52, 199, 89, 0.12);
+}
+
+.dark .collection-impact__store-week-chip.has-value .week-val {
+  color: #34c759;
+}
+
+.collection-impact__store-week-chip.is-empty .week-val {
+  color: var(--ci-muted);
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+.collection-impact__empty-search {
+  padding: 30px 10px;
+  text-align: center;
+  color: var(--ci-muted);
+  font-size: 13px;
+}
+
+/* ── 2. 원본 표(테이블) 뷰 ── */
+.collection-impact__table-hint {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ci-muted);
+  margin-bottom: 8px;
+  background: var(--ci-soft);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
 .collection-impact__table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .collection-impact table {
   border-collapse: collapse;
-  min-width: 720px;
+  min-width: 540px;
   width: 100%;
 }
 
@@ -504,8 +819,8 @@ html.dark .collection-impact {
 .collection-impact td {
   border-bottom: 1px solid var(--ci-border);
   color: var(--ci-text);
-  font-size: 13px;
-  padding: 12px 10px;
+  font-size: 12.5px;
+  padding: 10px 8px;
   text-align: right;
 }
 
@@ -519,10 +834,13 @@ html.dark .collection-impact {
 .collection-impact th:first-child,
 .collection-impact td:first-child {
   left: 0;
-  max-width: 240px;
-  min-width: 200px;
+  max-width: 170px;
+  min-width: 120px;
   position: sticky;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .collection-impact td:first-child {
@@ -535,6 +853,21 @@ html.dark .collection-impact {
 
 .collection-impact td {
   font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .collection-impact th:first-child,
+  .collection-impact td:first-child {
+    min-width: 105px;
+    max-width: 120px;
+    font-size: 11.5px;
+    padding: 8px 6px;
+  }
+  .collection-impact th,
+  .collection-impact td {
+    padding: 8px 5px;
+    font-size: 11.5px;
+  }
 }
 
 .collection-impact__provenance {
@@ -566,6 +899,82 @@ html.dark .collection-impact {
   color: #34c759;
 }
 
+/* ── 임베디드(모달 및 컴포넌트 내부) 전용 안전 레이아웃 ── */
+.collection-impact--embedded .collection-impact__metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.collection-impact--embedded .collection-impact__grid {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 1100px) {
+  .collection-impact--embedded .collection-impact__metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .collection-impact--embedded .collection-impact__grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr);
+  }
+}
+
+/* ── 컨테이너 쿼리 (부모 요소 너비 기준 반응형) ── */
+@container collection-impact (max-width: 860px) {
+  .collection-impact__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .collection-impact__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container collection-impact (max-width: 520px) {
+  .collection-impact {
+    gap: 12px;
+  }
+  .collection-impact__metrics {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .collection-impact__metric {
+    min-height: 135px;
+    padding: 13px 14px;
+  }
+  .collection-impact__metric p {
+    font-size: 11.5px;
+    margin: 8px 0 2px;
+  }
+  .collection-impact__metric strong,
+  .collection-impact__metric-val {
+    font-size: 22px;
+  }
+  .collection-impact__metric-val--text {
+    font-size: 17px;
+  }
+  .collection-impact__metric small {
+    font-size: 10.5px;
+    margin-top: 4px;
+  }
+  .collection-impact__pill-tab {
+    padding: 2px 7px;
+    font-size: 10px;
+  }
+  .collection-impact__card {
+    border-radius: 18px;
+    padding: 16px;
+  }
+  .collection-impact__week-chart {
+    gap: 6px;
+    height: 200px;
+  }
+  .collection-impact__bar-track {
+    height: 130px;
+  }
+  .collection-impact__week strong {
+    font-size: 11px;
+  }
+}
+
+/* ── 뷰포트 미디어 쿼리 ── */
 @media (max-width: 900px) {
   .collection-impact__toolbar { align-items: stretch; flex-direction: column; }
   .collection-impact__period-controls { width: 100%; }
@@ -580,12 +989,15 @@ html.dark .collection-impact {
   .collection-impact__toolbar h2 { font-size: 30px; }
   .collection-impact__period-controls button { flex: 1 0 100%; }
   .collection-impact__metrics { grid-template-columns: 1fr 1fr; gap: 8px; }
-  .collection-impact__metric { min-height: 150px; padding: 16px; }
-  .collection-impact__metric strong { font-size: 29px; }
-  .collection-impact__metric p { margin-top: 14px; }
+  .collection-impact__metric { min-height: 140px; padding: 14px; }
+  .collection-impact__metric strong,
+  .collection-impact__metric-val { font-size: 24px; }
+  .collection-impact__metric-val--text { font-size: 18px; }
+  .collection-impact__metric p { margin-top: 10px; }
   .collection-impact__card { border-radius: 18px; padding: 16px; }
-  .collection-impact__week-chart { gap: 6px; height: 220px; }
-  .collection-impact__bar-track { height: 140px; }
+  .collection-impact__week-chart { gap: 6px; height: 210px; }
+  .collection-impact__bar-track { height: 135px; }
   .collection-impact__week strong { font-size: 11px; }
   .collection-impact__provenance { flex-direction: column; }
 }
+

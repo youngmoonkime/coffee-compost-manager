@@ -5,15 +5,31 @@ import { X } from 'lucide-react';
 interface TaskModalProps {
   title: string;
   subtitle?: string;
+  maxWidth?: 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl';
   onClose: () => void;
   children: React.ReactNode;
 }
+
+const MAX_WIDTH_CLASSES: Record<NonNullable<TaskModalProps['maxWidth']>, string> = {
+  lg: 'sm:max-w-lg',
+  xl: 'sm:max-w-xl',
+  '2xl': 'sm:max-w-2xl',
+  '3xl': 'sm:max-w-3xl',
+  '4xl': 'sm:max-w-4xl',
+  '5xl': 'sm:max-w-5xl',
+};
 
 /**
  * 빠른 실행 결과를 띄우는 팝업 — 모바일은 아래에서 올라오는 시트, 데스크톱은 가운데 창.
  * 화면 전환 애니메이션(transform) 안에서 fixed 위치가 틀어지지 않도록 body 에 붙인다.
  */
-export const TaskModal: React.FC<TaskModalProps> = ({ title, subtitle, onClose, children }) => {
+export const TaskModal: React.FC<TaskModalProps> = ({
+  title,
+  subtitle,
+  maxWidth = 'lg',
+  onClose,
+  children,
+}) => {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -29,6 +45,8 @@ export const TaskModal: React.FC<TaskModalProps> = ({ title, subtitle, onClose, 
     };
   }, [onClose]);
 
+  const widthClass = MAX_WIDTH_CLASSES[maxWidth] || 'sm:max-w-lg';
+
   return createPortal(
     <div
       role="dialog"
@@ -38,7 +56,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({ title, subtitle, onClose, 
       onClick={onClose}
     >
       <div
-        className="w-full sm:max-w-lg max-h-[88vh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 shadow-2xl overflow-hidden"
+        className={`w-full ${widthClass} max-h-[90vh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#1C1C1E] border border-black/5 dark:border-white/10 shadow-2xl overflow-hidden`}
         onClick={event => event.stopPropagation()}
       >
         <header className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3.5 border-b border-black/5 dark:border-white/10 shrink-0">

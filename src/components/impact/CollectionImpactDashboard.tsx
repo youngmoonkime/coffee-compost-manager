@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { LayoutList, Table as TableIcon, Search } from 'lucide-react';
 import { gasApi, getCollectionSheetUrl, type CollectionData, type DashboardData } from '../../services/gasClient';
 import { isImplausiblePrevious } from '../../services/reportData';
 import '../../styles/collection-impact.css';
@@ -95,11 +96,22 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
 
   // 비교 모드: 진행 중인 월이면 기본 'week'(전주차), 완료된 월이면 기본 'month'(전월)
   const [compareMode, setCompareMode] = useState<'week' | 'month'>('week');
+  // 매장별 현황 뷰 모드: 모바일 환경에서 주차별 수거량이 잘리지 않는 카드형을 기본 제공
+  const [storeViewMode, setStoreViewMode] = useState<'card' | 'table'>('card');
+  const [searchQuery, setSearchQuery] = useState('');
+
   useEffect(() => {
     if (dashboard) {
       setCompareMode(dashboard.collection.isPartialMonth ? 'week' : 'month');
     }
   }, [dashboard?.period.year, dashboard?.period.month, dashboard?.collection.isPartialMonth]);
+
+  const filteredStores = useMemo(() => {
+    if (!collections?.stores) return [];
+    if (!searchQuery.trim()) return collections.stores;
+    const q = searchQuery.trim().toLowerCase();
+    return collections.stores.filter((store) => store.storeName.toLowerCase().includes(q));
+  }, [collections?.stores, searchQuery]);
 
   const maxWeek = Math.max(...(dashboard?.collection.weeklyKg || [0]), 1);
   const maxStore = Math.max(...(dashboard?.topStores.map((store) => store.totalKg) || [0]), 1);
@@ -147,7 +159,7 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
   }
 
   return (
-    <div className="collection-impact">
+    <div className={`collection-impact ${embedded ? 'collection-impact--embedded' : ''}`}>
       {!embedded && (
       <section className="collection-impact__toolbar" aria-label="조회 기간">
         <div>
@@ -213,11 +225,11 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
             <article className="collection-impact__metric collection-impact__metric--primary">
               <span className="collection-impact__badge">실측</span>
               <p>이번 달 수거량</p>
-              <strong>{formatTons(dashboard.collection.totalKg)}</strong>
+              <strong className="collection-impact__metric-val">{formatTons(dashboard.collection.totalKg)}</strong>
               <small>{dashboard.period.year}년 {dashboard.period.month}월 누적</small>
             </article>
             <article className="collection-impact__metric">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div className="collection-impact__metric-head">
                 <span className="collection-impact__badge">
                   {compareMode === 'week' ? '주간 추이' : (isPartial ? '동기간 대비' : '전월 대비')}
                 </span>
@@ -242,7 +254,7 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
               {compareMode === 'week' ? (
                 <>
                   <p>전주차 대비 {weekDiffKg > 0 ? '증가' : weekDiffKg < 0 ? '감소' : ''}</p>
-                  <strong style={{ color: weekPercent != null ? (weekPercent > 0 ? '#34c759' : weekPercent < 0 ? '#ff453a' : 'inherit') : 'inherit' }}>
+                  <strong className="collection-impact__metric-val" style={{ color: weekPercent != null ? (weekPercent > 0 ? '#34c759' : weekPercent < 0 ? '#ff453a' : 'inherit') : 'inherit' }}>
                     {weekText}
                   </strong>
                   <small>{weekSubtext}</small>
@@ -250,7 +262,7 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
               ) : (
                 <>
                   <p>{isPartial ? '전월 동기간 대비' : '전월 대비'}</p>
-                  <strong style={{ color: monthText.startsWith('+') ? '#34c759' : monthText.startsWith('-') ? '#ff453a' : 'inherit' }}>
+                  <strong className="collection-impact__metric-val" style={{ color: monthText.startsWith('+') ? '#34c759' : monthText.startsWith('-') ? '#ff453a' : 'inherit' }}>
                     {monthText}
                   </strong>
                   <small>{monthSubtext}</small>
@@ -260,13 +272,15 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
             <article className="collection-impact__metric">
               <span className="collection-impact__badge">실측</span>
               <p>수거 발생 매장</p>
-              <strong>{dashboard.collection.activeStoreCount.toLocaleString('ko-KR')}곳</strong>
+              <strong className="collection-impact__metric-val">{dashboard.collection.activeStoreCount.toLocaleString('ko-KR')}곳</strong>
               <small>해당 월 수거량이 있는 매장</small>
             </article>
             <article className="collection-impact__metric">
               <span className="collection-impact__badge">운영 기준</span>
               <p>현재 운영 목장</p>
-              <strong>{dashboard.operatingFarm?.name || '—'}</strong>
+              <strong className="collection-impact__metric-val collection-impact__metric-val--text" title={dashboard.operatingFarm?.name || undefined}>
+                {dashboard.operatingFarm?.name || '—'}
+              </strong>
               <small>{dashboard.operatingFarm?.role === 'CURRENT_OPERATION' ? '현재 운영' : '기간 기준 자동 선택'}</small>
             </article>
           </section>
@@ -278,7 +292,7 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
                   <span className="collection-impact__badge">실측</span>
                   <h3>주차별 수거량</h3>
                 </div>
-                <strong>{formatKg(dashboard.collection.totalKg)}</strong>
+                <strong className="collection-impact__card-total">{formatKg(dashboard.collection.totalKg)}</strong>
               </div>
               <div className="collection-impact__week-chart" aria-label="주차별 수거량 막대 그래프">
                 {dashboard.collection.weeklyKg.map((kg, index) => (
@@ -327,28 +341,121 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
                 <span className="collection-impact__badge">실측 원본 집계</span>
                 <h3>매장별 수거 현황</h3>
               </div>
-              <small>{collections.stores.length.toLocaleString('ko-KR')}개 매장</small>
+              <div className="collection-impact__view-switcher" role="tablist" aria-label="매장별 보기 방식">
+                <button
+                  type="button"
+                  className={`collection-impact__view-btn ${storeViewMode === 'card' ? 'active' : ''}`}
+                  onClick={() => setStoreViewMode('card')}
+                  title="모바일 맞춤 카드 보기 (주차별 수거량이 잘리지 않음)"
+                >
+                  <LayoutList className="w-3.5 h-3.5" />
+                  <span>카드형</span>
+                </button>
+                <button
+                  type="button"
+                  className={`collection-impact__view-btn ${storeViewMode === 'table' ? 'active' : ''}`}
+                  onClick={() => setStoreViewMode('table')}
+                  title="전체 표로 보기"
+                >
+                  <TableIcon className="w-3.5 h-3.5" />
+                  <span>표형</span>
+                </button>
+              </div>
             </div>
-            <div className="collection-impact__table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>매장</th>
-                    {collections.weeklyKg.map((_, index) => <th key={index}>{index + 1}주</th>)}
-                    <th>합계</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {collections.stores.map((store) => (
-                    <tr key={`${store.no}-${store.storeName}`}>
-                      <td>{store.storeName}</td>
-                      {store.weeklyKg.map((kg, index) => <td key={index}>{kg ? Math.round(kg).toLocaleString('ko-KR') : '—'}</td>)}
-                      <td><strong>{Math.round(store.totalKg).toLocaleString('ko-KR')}</strong></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            {/* 검색 및 현황 바 */}
+            <div className="collection-impact__store-toolbar">
+              <div className="collection-impact__search-box">
+                <Search className="w-4 h-4 collection-impact__search-icon" aria-hidden="true" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="매장명 검색..."
+                  className="collection-impact__search-input"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="collection-impact__search-clear"
+                    aria-label="검색어 지우기"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+              <span className="collection-impact__store-count">
+                {searchQuery ? `${filteredStores.length}개 / 전체 ${collections.stores.length}개 매장` : `전체 ${collections.stores.length}개 매장`}
+              </span>
             </div>
+
+            {storeViewMode === 'card' ? (
+              /* ── 1. 모바일 최적화 카드형 뷰 (주차별 수거량이 100% 한눈에 보임) ── */
+              <div className="collection-impact__store-cards">
+                {filteredStores.map((store) => (
+                  <article key={`${store.no}-${store.storeName}`} className="collection-impact__store-card">
+                    <div className="collection-impact__store-card-header">
+                      <div className="collection-impact__store-card-title">
+                        <span className="collection-impact__store-no">{store.no}</span>
+                        <strong className="collection-impact__store-name" title={store.storeName}>
+                          {store.storeName}
+                        </strong>
+                      </div>
+                      <div className="collection-impact__store-total-badge">
+                        <span className="total-label">합계</span>
+                        <strong className="total-val">{Math.round(store.totalKg).toLocaleString('ko-KR')} kg</strong>
+                      </div>
+                    </div>
+                    <div className="collection-impact__store-weeks">
+                      {store.weeklyKg.map((kg, wIndex) => (
+                        <div
+                          key={wIndex}
+                          className={`collection-impact__store-week-chip ${kg ? 'has-value' : 'is-empty'}`}
+                        >
+                          <span className="week-label">{wIndex + 1}주</span>
+                          <strong className="week-val">{kg ? `${Math.round(kg)}kg` : '—'}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+                {filteredStores.length === 0 && (
+                  <div className="collection-impact__empty-search">
+                    <p>'{searchQuery}'에 해당하는 매장이 없습니다.</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* ── 2. 원본 표(테이블) 뷰 ── */
+              <>
+                <div className="collection-impact__table-hint">
+                  <span>↔ 좌우로 밀어서 1~5주차 및 합계를 확인하세요</span>
+                </div>
+                <div className="collection-impact__table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>매장</th>
+                        {collections.weeklyKg.map((_, index) => <th key={index}>{index + 1}주</th>)}
+                        <th>합계</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredStores.map((store) => (
+                        <tr key={`${store.no}-${store.storeName}`}>
+                          <td title={store.storeName}>{store.storeName}</td>
+                          {store.weeklyKg.map((kg, index) => (
+                            <td key={index}>{kg ? Math.round(kg).toLocaleString('ko-KR') : '—'}</td>
+                          ))}
+                          <td><strong>{Math.round(store.totalKg).toLocaleString('ko-KR')}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </section>
 
           <footer className="collection-impact__provenance" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
