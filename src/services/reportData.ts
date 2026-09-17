@@ -1,7 +1,8 @@
 import type { CompostSettings, MeasurementRecord, OperatingCycle } from '../types';
 import { DEFAULT_RANCH_NAME, DEFAULT_SAWDUST_PRICE_PER_TON } from '../constants/defaultData';
 import { getCurrentDateString, normalizeName, summarizePiles } from '../utils/calculations';
-import { summarizeCycle } from '../utils/fieldOps';
+import { summarizeCycle, getAddedKg, getBeddingUsedKg } from '../utils/fieldOps';
+import { decideBedding } from '../utils/assistantInsights';
 import type { CollectionData, DashboardData } from './gasClient';
 
 /**
@@ -825,11 +826,17 @@ export function buildImpactFacts({
   }
   const monthRanches = [...monthKgByRanch.keys()].filter(ranch => (monthKgByRanch.get(ranch) ?? 0) > 0);
 
-  // 매장 수거량을 받는 목장 — 수거관리의 운영 목장, 없으면 이번 달 하역 목장이 한 곳일 때 그 목장
+  // 매장 수거량을 받는 목장 — 수거관리의 운영 목장, 없으면 받는 목장이 한 곳으로 분명할 때만 그 목장.
+  // 여러 목장 중 하나를 임의로 고르면 매장 수거량이 그 목장의 투입량처럼 보이므로 고르지 않는다.
   const operatingFarm = normalizeName(dashboard?.operatingFarm?.name ?? '');
+  const recordRanches = [...new Set(periodRecords.map(r => normalizeName(r.ranchName)))];
   const receivingRanch =
     operatingFarm ||
-    (monthRanches.length === 1 ? monthRanches[0] : (records.length > 0 ? normalizeName(records[0].ranchName) : DEFAULT_RANCH_NAME));
+    (monthRanches.length === 1
+      ? monthRanches[0]
+      : monthRanches.length === 0 && recordRanches.length === 1
+        ? recordRanches[0]
+        : '');
 
   let basisKg = 0;
   let basisLabel = '';
@@ -886,12 +893,15 @@ export function buildImpactFacts({
     }
   }
 
-  const standardReport = buildStandardReportFacts({
-    period,
-    dashboard,
-    collections,
-    records: periodRecords,
-  });
+  // 대외 보고서 숫자는 매장 수거 실적에서만 나온다 — 수거 자료가 없으면 만들지 않는다 (0kg 로 채우지 않음)
+  const standardReport = dashboard
+    ? buildStandardReportFacts({
+        period,
+        dashboard,
+        collections,
+        records: periodRecords,
+      })
+    : undefined;
 
   return {
     period,
@@ -980,5 +990,571 @@ export function factsForAudience(facts: ImpactFacts, audience: Audience) {
       : null,
     sources: facts.sources,
     dataWarnings,
+  };
+}
+
+/* ─────────────────── 목장 내부용 보고서 스키마 (FarmReportData) ─────────────────── */
+
+export type FarmOperationType = 'single_pile_continuous' | 'tonbag_batch' | 'zone_separated' | 'custom';
+
+export type FarmBeddingStatus =
+  | 'accumulating'
+  | 'managing'
+  | 'preparing'
+  | 'candidate'
+  | 'hold'
+  | 'insufficient';
+
+export type FarmTrend = 'rising' | 'falling' | 'stabilizing' | 'mixed' | 'insufficient';
+
+export type FarmMoldStatus = 'none' | 'partial' | 'spreading' | 'unknown';
+
+export interface FarmReportAction {
+  id: string;
+  title: string;
+  reason: string;
+  priority: 'high' | 'normal';
+  actionId?: string;
+}
+
+export interface FarmReportData {
+  farm: {
+    id: string;
+    name: string;
+    operationType: FarmOperationType;
+    operationTypeLabel: string;
+  };
+
+  period: {
+    start: string;
+    end: string;
+    label: string;
+    filterMode: 'current' | '7days' | '30days' | '90days' | 'all';
+  };
+
+  pile: {
+    currentKg: number;
+    targetKg: number | null;
+    progressPct: number | null;
+    latestInputKg: number | null;
+    latestInputDate: string | null;
+    usedKg: number;
+    addedKg: number;
+    accumulationBasis: string;
+  };
+
+  condition: {
+    temperature: number | null;
+    temperatureTrend: FarmTrend;
+    temperatureTrendLabel: string;
+    temperaturePoints: number[];
+
+    moisture: number | null;
+    moistureTrend: FarmTrend;
+    moistureTrendLabel: string;
+    moisturePoints: number[];
+
+    moldStatus: FarmMoldStatus;
+    moldStatusLabel: string;
+
+    /** 신규 투입 후 함수율/온도 영향 설명 문구 (있을 경우) */
+    recentImpactNote: string | null;
+  };
+
+  management: {
+    visitCountLast7Days: number;
+    daysSinceLastVisit: number | null;
+    visitDue: boolean;
+
+    mixingCountLast7Days: number;
+    daysSinceLastMixing: number | null;
+    mixingLevel: 'unknown' | 'none' | 'low' | 'ok';
+    mixingLevelLabel: string;
+    mixingNotice: string | null;
+    recommendedWeeklyMixing: string;
+  };
+
+  bedding: {
+    status: FarmBeddingStatus;
+    statusLabel: string;
+    reasons: string[];
+    notice: string;
+  };
+
+  actions: FarmReportAction[];
+
+  nextVisitChecklist: {
+    text: string;
+    priority: 'high' | 'normal';
+  }[];
+
+  recentRecords: MeasurementRecord[];
+
+  dataQuality: {
+    missingFields: string[];
+    warnings: string[];
+  };
+
+  generatedAt: string;
+}
+
+/**
+ * 목장 내부용 보고서 전용 데이터 빌더
+ * - 100% 순수 TypeScript 코드로 계산 (AI 미호출)
+ * - 부숙관리 실측 데이터만 사용 (카페 수거량 합산 금지)
+ * - 건준목장 단일 더미 연속 혼합 방식 및 신규 투입 이벤트 정밀 반영
+ */
+export function buildFarmReportData({
+  records,
+  ranchName = DEFAULT_RANCH_NAME,
+  settings,
+  filterMode = 'current',
+  today = getCurrentDateString(),
+  cycle = null,
+}: {
+  records: MeasurementRecord[];
+  ranchName?: string;
+  settings: CompostSettings;
+  filterMode?: 'current' | '7days' | '30days' | '90days' | 'all';
+  today?: string;
+  /** 빠른 실행(깔개 사용·이상 신호 점검)과 같은 운영 사이클로 판정하기 위해 받는다 */
+  cycle?: OperatingCycle | null;
+}): FarmReportData {
+  const normName = normalizeName(ranchName);
+
+  // 1. 해당 목장의 기록 필터링 & 날짜 정렬
+  const ranchRecords = records
+    .filter(r => normalizeName(r.ranchName) === normName)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // 날짜 범위 필터링 계산
+  let filteredRecords = ranchRecords;
+  let periodStart = ranchRecords[0]?.date ?? today;
+  const periodEnd = today;
+  let periodLabel = '현재 상태';
+
+  if (filterMode === '7days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    periodStart = d.toISOString().slice(0, 10);
+    periodLabel = '최근 7일';
+    filteredRecords = ranchRecords.filter(r => r.date >= periodStart);
+  } else if (filterMode === '30days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    periodStart = d.toISOString().slice(0, 10);
+    periodLabel = '최근 30일';
+    filteredRecords = ranchRecords.filter(r => r.date >= periodStart);
+  } else if (filterMode === '90days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 90);
+    periodStart = d.toISOString().slice(0, 10);
+    periodLabel = '최근 3개월';
+    filteredRecords = ranchRecords.filter(r => r.date >= periodStart);
+  } else if (filterMode === 'all') {
+    periodLabel = '전체 기간';
+  }
+
+  // 2. 더미량 계산: 누적 투입량 - 누적 깔개 사용량
+  const addedKg = Math.round(ranchRecords.reduce((sum, r) => sum + getAddedKg(r), 0));
+  const usedKg = Math.round(ranchRecords.reduce((sum, r) => sum + getBeddingUsedKg(r), 0));
+  const currentKg = Math.max(0, addedKg - usedKg);
+
+  // 가장 최근 투입 기록
+  const lastInputRecord = [...ranchRecords].reverse().find(r => getAddedKg(r) > 0);
+  const latestInputKg = lastInputRecord ? getAddedKg(lastInputRecord) : null;
+  const latestInputDate = lastInputRecord ? lastInputRecord.date : null;
+
+  // 목표량 설정 여부 확인
+  const rawTarget = settings.beddingTargetKg?.[normName];
+  const targetKg = Number.isFinite(rawTarget) && Number(rawTarget) > 0 ? Number(rawTarget) : null;
+  const progressPct = targetKg ? Math.round((currentKg / targetKg) * 100) : null;
+
+  // 3. 측정 기록 및 추세 계산
+  const measuredRecords = ranchRecords.filter(r => r.moisture > 0 || r.coreTemp > 0);
+  const recentMeasured = measuredRecords.slice(-5);
+  const latestMeasured = measuredRecords[measuredRecords.length - 1] ?? null;
+
+  const currentTemp = latestMeasured && latestMeasured.coreTemp > 0 ? latestMeasured.coreTemp : null;
+  const currentMoisture = latestMeasured && latestMeasured.moisture > 0 ? latestMeasured.moisture : null;
+
+  const tempPoints = recentMeasured.map(r => r.coreTemp).filter(v => v > 0);
+  const moisturePoints = recentMeasured.map(r => r.moisture).filter(v => v > 0);
+
+  // 온도 추세
+  let temperatureTrend: FarmTrend = 'insufficient';
+  let temperatureTrendLabel = '자료 부족';
+  if (tempPoints.length >= 2) {
+    const latest = tempPoints[tempPoints.length - 1];
+    const prev = tempPoints.slice(0, -1);
+    const avg = prev.reduce((a, b) => a + b, 0) / prev.length;
+    const delta = latest - avg;
+    if (delta <= -3.0) {
+      temperatureTrend = 'stabilizing';
+      temperatureTrendLabel = '안정화 방향';
+    } else if (delta >= 3.0) {
+      temperatureTrend = 'rising';
+      temperatureTrendLabel = '상승 중';
+    } else {
+      temperatureTrend = 'stabilizing';
+      temperatureTrendLabel = '안정화 유지';
+    }
+  }
+
+  // 함수율 추세
+  let moistureTrend: FarmTrend = 'insufficient';
+  let moistureTrendLabel = '자료 부족';
+  if (moisturePoints.length >= 2) {
+    const latest = moisturePoints[moisturePoints.length - 1];
+    const prev = moisturePoints.slice(0, -1);
+    const avg = prev.reduce((a, b) => a + b, 0) / prev.length;
+    const delta = latest - avg;
+    if (delta <= -2.5) {
+      moistureTrend = 'falling';
+      moistureTrendLabel = '감소 중';
+    } else if (delta >= 2.5) {
+      moistureTrend = 'rising';
+      moistureTrendLabel = '상승 중';
+    } else {
+      moistureTrend = 'stabilizing';
+      moistureTrendLabel = '유지';
+    }
+  }
+
+  // 4. 신규 투입 이벤트 영향 분석
+  let recentImpactNote: string | null = null;
+  if (recentMeasured.length >= 2 && lastInputRecord) {
+    const prevMeasured = recentMeasured[recentMeasured.length - 2];
+    if (
+      latestMeasured &&
+      prevMeasured &&
+      lastInputRecord.date >= prevMeasured.date &&
+      lastInputRecord.date <= latestMeasured.date
+    ) {
+      if (latestMeasured.moisture > prevMeasured.moisture || latestMeasured.coreTemp > prevMeasured.coreTemp) {
+        recentImpactNote = `최근 신규 커피박 투입(${latestInputKg?.toLocaleString()}kg, ${latestInputDate}) 이후 함수율/온도가 일시적으로 상승했습니다. 전체 더미 혼합에 따른 자연스러운 현상입니다.`;
+      }
+    }
+  }
+
+  // 5. 혼합 및 방문 관리 (최근 7일 기준)
+  const d7 = new Date();
+  d7.setDate(d7.getDate() - 7);
+  const d7Str = d7.toISOString().slice(0, 10);
+
+  const visitsLast7 = ranchRecords.filter(r => r.date >= d7Str);
+  const visitCountLast7Days = visitsLast7.length;
+
+  const latestVisit = ranchRecords[ranchRecords.length - 1] ?? null;
+  const daysSinceLastVisit = latestVisit
+    ? Math.max(0, Math.round((new Date(today).getTime() - new Date(latestVisit.date).getTime()) / (1000 * 3600 * 24)))
+    : null;
+  const visitDue = daysSinceLastVisit !== null && daysSinceLastVisit >= 3;
+
+  const mixedRecords = ranchRecords.filter(r => r.mixed === true);
+  const mixingCountLast7Days = mixedRecords.filter(r => r.date >= d7Str).length;
+  const lastMixedRecord = mixedRecords[mixedRecords.length - 1] ?? null;
+  const daysSinceLastMixing = lastMixedRecord
+    ? Math.max(0, Math.round((new Date(today).getTime() - new Date(lastMixedRecord.date).getTime()) / (1000 * 3600 * 24)))
+    : null;
+
+  const mixingRecords = ranchRecords.filter(r => r.mixed !== undefined);
+  let mixingLevel: 'unknown' | 'none' | 'low' | 'ok' = 'unknown';
+  let mixingLevelLabel = '기록 없음';
+  if (mixingRecords.length > 0) {
+    if (mixingCountLast7Days === 0) {
+      mixingLevel = 'none';
+      mixingLevelLabel = '관리 필요 (0회)';
+    } else if (mixingCountLast7Days === 1) {
+      mixingLevel = 'low';
+      mixingLevelLabel = '확인 필요 (1회)';
+    } else {
+      mixingLevel = 'ok';
+      mixingLevelLabel = `정상 (${mixingCountLast7Days}회)`;
+    }
+  }
+
+  const mixingNotice =
+    daysSinceLastMixing !== null && daysSinceLastMixing >= 4
+      ? `최근 혼합 이후 ${daysSinceLastMixing}일이 지났습니다. 곰팡이 예방 및 통기를 위해 혼합이 필요합니다.`
+      : null;
+
+  // 6. 곰팡이 관리
+  const latestWithMold = [...ranchRecords].reverse().find(r => r.moldStatus !== undefined);
+  let moldStatus: FarmMoldStatus = 'unknown';
+  let moldStatusLabel = '기록 없음';
+
+  if (latestWithMold && latestWithMold.moldStatus) {
+    if (latestWithMold.moldStatus === 'none') {
+      moldStatus = 'none';
+      moldStatusLabel = '발견 없음';
+    } else if (latestWithMold.moldStatus === 'some') {
+      moldStatus = 'partial';
+      moldStatusLabel = '일부 발견';
+    } else if (latestWithMold.moldStatus === 'spreading') {
+      moldStatus = 'spreading';
+      moldStatusLabel = '확산 중';
+    }
+  }
+
+  // 7. 깔개 사용 판단 (AI 없이 100% 코드 연산)
+  let beddingStatus: FarmBeddingStatus = 'managing';
+  let beddingStatusLabel = '관리 중';
+  const reasons: string[] = [];
+  let beddingNotice = '';
+
+  const minM = settings.usableMoistureMin ?? 20;
+  const maxM = settings.usableMoistureMax ?? 30;
+
+  // 곰팡이가 있으면 다른 조건과 무관하게 무조건 보류
+  if (moldStatus === 'partial' || moldStatus === 'spreading') {
+    beddingStatus = 'hold';
+    beddingStatusLabel = '사용 보류';
+    reasons.push(moldStatus === 'spreading' ? '⚠ 곰팡이 확산 중' : '⚠ 곰팡이 일부 발견');
+    beddingNotice = '곰팡이가 확인되어 깔개 사용이 보류되었습니다. 즉시 전체 더미를 혼합하고 다음 방문에서 상태를 재확인하세요.';
+  } else if (!latestVisit || measuredRecords.length === 0) {
+    beddingStatus = 'insufficient';
+    beddingStatusLabel = '데이터 부족';
+    reasons.push('현장 측정 기록 부족');
+    beddingNotice = '현장 점검 및 측정 기록이 없어 깔개 판단을 내릴 수 없습니다.';
+  } else {
+    // 곰팡이 없음 or 기록 없음
+    if (moldStatus === 'none') {
+      reasons.push('✓ 곰팡이 발견 없음');
+    } else {
+      reasons.push('△ 곰팡이 기록 없음');
+    }
+
+    // 함수율 조건
+    if (currentMoisture !== null) {
+      if (currentMoisture <= maxM && currentMoisture >= minM) {
+        reasons.push(`✓ 함수율 ${currentMoisture}% (현장 관찰 범위 ${minM}~${maxM}% 충족)`);
+      } else if (currentMoisture <= maxM + 5) {
+        reasons.push(`✓ 함수율 ${currentMoisture}% (관찰 범위 접근 중)`);
+      } else {
+        reasons.push(`△ 함수율 ${currentMoisture}% (아직 건조 필요)`);
+      }
+    }
+
+    if (moistureTrend === 'falling') {
+      reasons.push('✓ 함수율 지속 감소 중');
+    }
+
+    // 온도 조건
+    if (currentTemp !== null) {
+      if (currentTemp <= 45) {
+        reasons.push(`✓ 심부 온도 ${currentTemp}℃ (안정화 완료)`);
+      } else if (currentTemp > 65) {
+        reasons.push(`△ 심부 온도 ${currentTemp}℃ (발열 진행 중)`);
+      } else {
+        reasons.push(`✓ 심부 온도 ${currentTemp}℃ (발효 안정화 단계)`);
+      }
+    }
+
+    // 혼합 조건
+    if (mixingLevel === 'ok') {
+      reasons.push(`✓ 최근 7일 혼합 ${mixingCountLast7Days}회 (정상 관리)`);
+    } else if (mixingLevel === 'none') {
+      reasons.push('△ 최근 7일간 혼합 기록 없음');
+    }
+
+    // 목표량 조건
+    if (targetKg) {
+      if (progressPct !== null && progressPct >= 100) {
+        reasons.push(`✓ 목표량 ${targetKg.toLocaleString()}kg 도달 (${progressPct}%)`);
+      } else {
+        reasons.push(`△ 목표량 ${targetKg.toLocaleString()}kg 중 ${currentKg.toLocaleString()}kg (${progressPct}%)`);
+      }
+    } else {
+      reasons.push('△ 깔개 목표량 미설정 (상태 지표 우선 판단)');
+    }
+
+    // 종합 판단
+    const moistureOk = currentMoisture !== null && currentMoisture <= maxM + 3;
+    const tempOk = currentTemp !== null && currentTemp <= 48;
+    const targetOk = !targetKg || (progressPct !== null && progressPct >= 90);
+
+    if (moistureOk && tempOk && targetOk && moldStatus === 'none' && mixingLevel === 'ok') {
+      beddingStatus = 'candidate';
+      beddingStatusLabel = '사용 후보';
+      beddingNotice = '현재 더미는 함수율, 심부 온도, 혼합 관리가 모두 양호합니다. 신규 커피박을 추가하기 전 축사 깔개로 일부 사용을 검토할 수 있습니다.';
+    } else if ((moistureTrend === 'falling' || moistureOk) && (temperatureTrend === 'stabilizing' || tempOk)) {
+      beddingStatus = 'preparing';
+      beddingStatusLabel = '사용 준비';
+      beddingNotice = '함수율이 낮아지고 심부 온도가 안정화되는 방향입니다. 주기적인 혼합을 유지하며 관리해주세요.';
+    } else if (targetKg && progressPct !== null && progressPct < 60) {
+      beddingStatus = 'accumulating';
+      beddingStatusLabel = '축적 중';
+      beddingNotice = `현재 커피박을 모으는 중입니다. 목표량까지 약 ${Math.max(0, targetKg - currentKg).toLocaleString()}kg 남았습니다.`;
+    } else {
+      beddingStatus = 'managing';
+      beddingStatusLabel = '관리 중';
+      beddingNotice = '현재 더미의 부숙 및 건조 상태를 관리 중입니다. 다음 방문 시 온도와 함수율을 체크해주세요.';
+    }
+  }
+
+  // 깔개 판정은 빠른 실행과 같은 코드(decideBedding)로 정한다 — 화면마다 판정이 달라지지 않도록.
+  // 위의 reasons 는 판정 근거를 보여 주는 설명으로만 쓴다.
+  const decision = decideBedding(summarizeCycle({ records, ranchName: normName, settings, cycle, today }));
+  beddingStatus = decision.key;
+  beddingStatusLabel = decision.label;
+  beddingNotice = `${decision.reason} ${decision.nextAction}`.trim();
+
+  // 8. 지금 해야 할 일 TOP 3 (우선순위 기반 자동 생성)
+  const actions: FarmReportAction[] = [];
+
+  if (moldStatus === 'partial' || moldStatus === 'spreading') {
+    actions.push({
+      id: 'act-mold',
+      title: '곰팡이 관리 및 전면 혼합',
+      reason: '더미에서 곰팡이가 확인되었습니다. 호기성 발효를 위해 전체 더미를 뒤집어 혼합해주세요.',
+      priority: 'high',
+      actionId: 'mix',
+    });
+  }
+
+  if (daysSinceLastMixing === null || daysSinceLastMixing >= 3 || mixingLevel === 'none') {
+    if (actions.length < 3) {
+      actions.push({
+        id: 'act-mix',
+        title: '전체 더미 혼합 작업',
+        reason:
+          daysSinceLastMixing !== null
+            ? `최근 혼합 이후 ${daysSinceLastMixing}일이 지났습니다. 내부 열과 수분을 분산시켜주세요.`
+            : '최근 7일간 혼합 기록이 없습니다. 균일한 부숙을 위해 혼합해주세요.',
+        priority: 'high',
+        actionId: 'mix',
+      });
+    }
+  }
+
+  if (daysSinceLastVisit === null || daysSinceLastVisit >= 3) {
+    if (actions.length < 3) {
+      actions.push({
+        id: 'act-visit',
+        title: '현장 점검 (심부온도·함수율 측정)',
+        reason:
+          daysSinceLastVisit !== null
+            ? `최근 점검 이후 ${daysSinceLastVisit}일이 지났습니다. 상태 변화를 측정해주세요.`
+            : '최근 현장 점검 기록이 없습니다. 현장 상태를 확인해주세요.',
+        priority: 'high',
+        actionId: 'measure',
+      });
+    }
+  }
+
+  if (moldStatus === 'unknown' && actions.length < 3) {
+    actions.push({
+      id: 'act-mold-check',
+      title: '곰팡이 상태 육안 확인',
+      reason: '깔개 사용 판단 전에 더미 표면과 내부에 백색/녹색 곰팡이가 피었는지 확인이 필요합니다.',
+      priority: 'normal',
+      actionId: 'inspect',
+    });
+  }
+
+  if (beddingStatus === 'candidate' && actions.length < 3) {
+    actions.push({
+      id: 'act-bedding',
+      title: '신규 투입 전 깔개 사용 검토',
+      reason: '현재 더미의 부숙 상태가 양호합니다. 신규 커피박을 추가하기 전 깔개 사용을 검토하세요.',
+      priority: 'normal',
+      actionId: 'bedding',
+    });
+  }
+
+  if (!targetKg && actions.length < 3) {
+    actions.push({
+      id: 'act-target',
+      title: '깔개 목표량 설정 검토',
+      reason: '축사에서 한 번에 교체할 깔개 목표량을 설정하면 적정 사용 시점을 더 명확히 알 수 있습니다.',
+      priority: 'normal',
+      actionId: 'settings',
+    });
+  }
+
+  // 9. 다음 방문 체크리스트 자동 생성
+  const nextVisitChecklist = [
+    { text: '심부 온도 측정 (중앙 및 측면)', priority: 'high' as const },
+    { text: '함수율 실측 (상·중·하단)', priority: 'high' as const },
+    { text: '곰팡이 발생 여부 육안 확인', priority: 'high' as const },
+    { text: '더미 혼합 여부 판단 및 작업', priority: (daysSinceLastMixing ?? 0) >= 2 ? ('high' as const) : ('normal' as const) },
+    { text: '신규 커피박 투입 시 하역량(kg) 기록', priority: 'normal' as const },
+    { text: '축사 깔개로 반출 시 사용량(kg) 기록', priority: 'normal' as const },
+    { text: '더미 상태 사진 촬영 (표면/단면)', priority: 'normal' as const },
+    { text: '이상 악취(부패취) 발생 여부 점검', priority: 'normal' as const },
+  ];
+
+  // 10. 결측치 및 데이터 품질
+  const missingFields: string[] = [];
+  const warnings: string[] = [];
+
+  if (currentTemp === null) missingFields.push('심부 온도 측정값 없음');
+  if (currentMoisture === null) missingFields.push('함수율 측정값 없음');
+  if (moldStatus === 'unknown') missingFields.push('곰팡이 상태 미기록');
+  if (mixingLevel === 'unknown') missingFields.push('혼합 작업 내역 미기록');
+  if (!targetKg) warnings.push('목장 깔개 목표량이 설정되지 않았습니다 (설정 > 목표량).');
+
+  return {
+    farm: {
+      id: normName,
+      name: ranchName,
+      operationType: 'single_pile_continuous',
+      operationTypeLabel: '단일 더미 연속혼합형 (한 구역에 지속 추가 및 혼합)',
+    },
+    period: {
+      start: periodStart,
+      end: periodEnd,
+      label: periodLabel,
+      filterMode,
+    },
+    pile: {
+      currentKg,
+      targetKg,
+      progressPct,
+      latestInputKg,
+      latestInputDate,
+      usedKg,
+      addedKg,
+      accumulationBasis: '부숙관리 시트 현장 실측 기록 기준 (누적 투입량 - 누적 깔개 사용량)',
+    },
+    condition: {
+      temperature: currentTemp,
+      temperatureTrend,
+      temperatureTrendLabel,
+      temperaturePoints: tempPoints,
+      moisture: currentMoisture,
+      moistureTrend,
+      moistureTrendLabel,
+      moisturePoints,
+      moldStatus,
+      moldStatusLabel,
+      recentImpactNote,
+    },
+    management: {
+      visitCountLast7Days,
+      daysSinceLastVisit,
+      visitDue,
+      mixingCountLast7Days,
+      daysSinceLastMixing,
+      mixingLevel,
+      mixingLevelLabel,
+      mixingNotice,
+      recommendedWeeklyMixing: '주 2~3회 권장',
+    },
+    bedding: {
+      status: beddingStatus,
+      statusLabel: beddingStatusLabel,
+      reasons,
+      notice: beddingNotice,
+    },
+    actions: actions.slice(0, 3),
+    nextVisitChecklist,
+    recentRecords: filteredRecords.slice(-5).reverse(),
+    dataQuality: {
+      missingFields,
+      warnings,
+    },
+    generatedAt: new Date().toISOString(),
   };
 }

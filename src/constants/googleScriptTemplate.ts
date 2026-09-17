@@ -4,7 +4,7 @@
 
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
- * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v20)
+ * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v21)
  * =========================================================================
  * [간편 설정 방법]
  * 1. 구글 스프레드시트 새 문서(sheets.new)를 만듭니다. (기존 시트를 계속 써도 됩니다)
@@ -20,6 +20,10 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  *        다음 사용자로 실행: [나]  /  액세스 권한이 있는 사용자: [모든 사용자]  ★필수★
  *    - 이미 배포했다면: [배포] > [배포 관리] > 연필(수정) > 버전 [새 버전] > [배포]
  *      (이렇게 해야 웹 앱 URL 이 바뀌지 않습니다)
+ *
+ * [v21 변경점] 보안 · 목장 보고서 AI 설명
+ * - 연결 테스트(isTest) 요청은 "연결됨"만 돌려주고 다른 일은 하지 않습니다 (접속 코드 없이 AI 를 부를 수 없게).
+ * - 목장 내부용 보고서의 [AI 설명 보기](farm_ai_explanation)를 처리합니다. 판정은 앱이 정한 그대로 둡니다.
  *
  * [v20 변경점] 현장 점검은 점검 칸에만 기록
  * - 현장 점검(목장 매니저 포함)은 측정 칸(수거량·심부 온도·함수율·외기·직전 대비·판정·3지점·신규 투입량)을 쓰지 않습니다.
@@ -109,7 +113,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  */
 
 // 앱이 이 값을 보고 스크립트가 최신인지 판단한다. 코드를 고치면 반드시 올릴 것.
-var SCRIPT_VERSION = 20;
+var SCRIPT_VERSION = 21;
 
 var SHEET_PREFIX = "주간기록_";
 var LEGACY_SHEET = "커피박_주간기록";
@@ -231,7 +235,6 @@ function forbidden(message) {
 
 /** POST 요청을 권한으로 거른다. 통과하면 null */
 function checkPostAccess(data, access) {
-  if (data.isTest) return null;
   if (access.role === "admin") return null;
   if (access.role !== "manager") return forbidden("접속 코드가 필요합니다. 앱에서 코드를 다시 입력해주세요.");
 
@@ -328,6 +331,11 @@ function doPost(e) {
     return jsonResponse({ status: "error", message: "보낸 내용을 해석할 수 없습니다." });
   }
 
+  // 1. 연결 테스트 — 코드 없이 받지만 다른 일은 아무것도 하지 않는다 (시트·AI 모두 건드리지 않음)
+  if (parsed.isTest) {
+    return jsonResponse({ status: "success", message: "구글 시트 웹 앱과 정상 연결되었습니다!" });
+  }
+
   // 접속 코드 확인 — 코드는 확인에만 쓰고 기록에는 남기지 않는다
   var access = resolveAccess(parsed.accessCode);
   delete parsed.accessCode;
@@ -336,10 +344,18 @@ function doPost(e) {
 
   // 리포트 문장 만들기는 시트를 건드리지 않는다 — 잠금을 잡지 않아 기록 저장과 부딪히지 않는다
   // AI 요청은 예외가 나도 JSON 으로 돌려준다 (앱이 이유를 보여 줄 수 있게)
-  if (parsed.eventType === "standard_ai_report" || parsed.eventType === "ai_report" || parsed.eventType === "ai_explain") {
+  if (
+    parsed.eventType === "standard_ai_report" ||
+    parsed.eventType === "ai_report" ||
+    parsed.eventType === "ai_explain" ||
+    parsed.eventType === "farm_ai_explanation"
+  ) {
     try {
       if (parsed.eventType === "standard_ai_report") {
         return jsonResponse(generateStandardImpactReport(parsed));
+      }
+      if (parsed.eventType === "farm_ai_explanation") {
+        return jsonResponse(generateFarmReportExplanation(parsed));
       }
       return jsonResponse(
         parsed.eventType === "ai_report" ? generateImpactReport(parsed) : generateExplanation(parsed)
@@ -359,15 +375,6 @@ function doPost(e) {
       return jsonResponse({
         status: "error",
         message: "스프레드시트가 연결되지 않았습니다. 스프레드시트 안에서 [확장 프로그램 > Apps Script]로 실행해주세요."
-      });
-    }
-
-    // 1. 연결 테스트 핑
-    if (data.isTest) {
-      return jsonResponse({
-        status: "success",
-        message: "구글 시트 웹 앱과 정상 연결되었습니다!",
-        spreadsheetTitle: ss.getName()
       });
     }
 
@@ -917,6 +924,31 @@ function generateExplanation(data) {
   };
 }
 
+/** 목장 내부용 보고서의 [AI 설명 보기] — 판정은 앱이 정한 그대로, 문장만 만든다 */
+function generateFarmReportExplanation(data) {
+  var prep = prepareAiCall(data, AI_MAX_EXPLAIN_CHARS);
+  if (!prep.ok) return prep.response;
+
+  var called = callGemini(
+    prep,
+    explainSystemPrompt("farmReport"),
+    "아래는 앱이 코드로 계산한 목장 보고서 자료입니다.\\n\\n" + prep.factsText,
+    AI_EXPLAIN_MAX_TOKENS
+  );
+  if (!called.ok) return aiFailure(called, prep.quota);
+
+  var summary = String((called.json && called.json.summary) || "").trim();
+  if (!summary) return { status: "error", message: "AI 가 보낸 설명이 비어 있습니다." };
+
+  return {
+    status: "success",
+    explanation: summary,
+    model: prep.model,
+    usedToday: prep.quota.used,
+    dailyLimit: prep.quota.limit
+  };
+}
+
 function aiFailure(called, quota) {
   var out = { status: "error", message: called.message, usedToday: quota.used, dailyLimit: quota.limit };
   if (called.code) out.code = called.code;
@@ -1013,7 +1045,8 @@ function reportSystemPrompt(audience) {
 function explainSystemPrompt(kind) {
   var topic = {
     field: "커피박 더미를 소 깔개로 쓸 수 있는지에 대한 앱의 판정(status)과, 앱이 찾아낸 이상 신호(signals)",
-    farm: "새 목장에 커피박 부숙 관리를 적용할 때 앱이 정한 운영 유형·관리 수준·부족한 조건"
+    farm: "새 목장에 커피박 부숙 관리를 적용할 때 앱이 정한 운영 유형·관리 수준·부족한 조건",
+    farmReport: "목장 내부용 보고서의 더미 상태·깔개 사용 판정(beddingStatus)·혼합·곰팡이 관리 현황"
   }[kind];
 
   return [
@@ -1026,6 +1059,7 @@ function explainSystemPrompt(kind) {
     "4. 목장은 한 구역에 커피박을 계속 모아 섞으므로, 측정값은 그 시점의 전체 더미 상태입니다.",
     "5. 과거 기록을 하나하나 다시 읊지 말고, 핵심만 쓰세요.",
     "6. 한국어 존댓말, 쉬운 말로 씁니다.",
+    "7. 값이 null 이거나 unknown 이면 기록이 없다는 뜻입니다. 0 이나 '없음'으로 바꿔 말하지 마세요.",
     "",
     "답은 아래 JSON 형식만 씁니다. 다른 말은 붙이지 마세요.",
     '{"summary":"...","actions":["...","..."]}',

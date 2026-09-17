@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, BarChart3, Bot, ChevronRight, FileText, Loader2, Sparkles, Sprout, Trash2, Wheat } from 'lucide-react';
+import { AlertCircle, BarChart3, Bot, ChevronRight, FileText, Layers, Loader2, Sparkles, Sprout, Trash2, Wheat } from 'lucide-react';
 import { useCompost } from '../../contexts/CompostContext';
 import { DEFAULT_RANCH_NAME } from '../../constants/defaultData';
 import { gasApi, getCollectionSheetUrl, type CollectionData, type DashboardData } from '../../services/gasClient';
 import {
   buildImpactFacts,
+  buildFarmReportData,
   getCurrentPeriod,
   hasEnoughData,
   periodOptions,
@@ -13,9 +14,10 @@ import {
 import { AUDIENCE_LABELS, requestStandardImpactReport, type ReportAudience } from '../../services/aiReport';
 import { hashText } from '../../services/aiExplain';
 import { getCurrentDateString, normalizeName } from '../../utils/calculations';
-import { summarizeCycle } from '../../utils/fieldOps';
+import { summarizeCycle, MOLD_LABELS } from '../../utils/fieldOps';
 import { getStorageItem, setStorageItem } from '../../utils/storage';
 import { ImpactReportView, type SavedReport } from './ImpactReportView';
+import { FarmReportView } from './FarmReportView';
 import { CollectionImpactDashboard } from '../impact/CollectionImpactDashboard';
 import { FieldCheckPanel, NewFarmPanel } from './QuickTasks';
 import { TaskModal } from './TaskModal';
@@ -66,6 +68,7 @@ export const AIAssistantView: React.FC = () => {
   const [periodKey, setPeriodKey] = useState(`${now.year}-${now.month}`);
   const period = periods.find(p => `${p.year}-${p.month}` === periodKey) ?? periods.find(p => `${p.year}-${p.month}` === `${now.year}-${now.month}`) ?? periods[0];
   const [audience, setAudience] = useState<ReportAudience>('farm');
+  const [farmFilterMode, setFarmFilterMode] = useState<'current' | '7days' | '30days' | '90days' | 'all'>('current');
 
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [collections, setCollections] = useState<CollectionData | null>(null);
@@ -143,6 +146,57 @@ export const AIAssistantView: React.FC = () => {
   const runReport = useCallback(
     async (force: boolean) => {
       setError(null);
+
+      // ── 1. 목장 내부용 리포트: 100% 순수 코드 연산 (AI 호출 없음, 즉시 오픈) ──
+      if (audience === 'farm') {
+        const ranchRecords = records.filter(r => normalizeName(r.ranchName) === ranchName);
+        if (ranchRecords.length === 0) {
+          setError(`${ranchName}의 현장 점검 및 측정 기록이 없습니다. 점검 기록을 먼저 저장해주세요.`);
+          return;
+        }
+
+        const farmData = buildFarmReportData({
+          records,
+          ranchName,
+          settings,
+          filterMode: farmFilterMode,
+          today,
+          cycle: getCycle(ranchName),
+        });
+
+        const id = `farm-${ranchName}-${farmFilterMode}`;
+        const next: SavedReport = {
+          id,
+          createdAt: new Date().toISOString(),
+          audience: 'farm',
+          model: '부숙관리 실측 연산 (순수 코드)',
+          facts,
+          sections: {
+            headline: `${farmData.farm.name} 목장 내부용 현장 보고서`,
+            summary: farmData.bedding.notice,
+            meaning: farmData.pile.accumulationBasis,
+            recommendation: farmData.actions[0]?.title ?? '현장 점검 관리',
+            actions: farmData.actions.map(a => a.title),
+          },
+          farmData,
+        };
+
+        setReport(next);
+        setReportReused(false);
+        saveToHistory(next);
+        return;
+      }
+
+      // ── 2. 대외 보고용 리포트: 표준 월간 현황 보고서 ──
+      // 대외 보고서는 매장 수거 실적이 근거다 — 수거 자료 없이 만들면 '0kg' 보고서가 된다
+      if (!collectionReady) {
+        setError('수거관리 시트를 확인하는 중입니다. 잠시 뒤 다시 눌러주세요.');
+        return;
+      }
+      if (!facts.collection || !facts.standardReport) {
+        setError('수거관리 시트를 불러오지 못해 대외 보고서를 만들 수 없습니다. 인터넷 연결을 확인한 뒤 다시 시도해주세요.');
+        return;
+      }
       if (!hasEnoughData(facts)) {
         setError('아직 리포트를 만들 자료가 없습니다. 측정 기록을 먼저 저장해주세요.');
         return;
@@ -163,7 +217,7 @@ export const AIAssistantView: React.FC = () => {
 
       setBusy(true);
       try {
-        const standardFacts = facts.standardReport!;
+        const standardFacts = facts.standardReport;
         const result = await requestStandardImpactReport(webhookUrl, standardFacts);
         if (!result.sections) {
           setError(result.message ?? '리포트를 생성하지 못했습니다.');
@@ -193,23 +247,34 @@ export const AIAssistantView: React.FC = () => {
         setBusy(false);
       }
     },
-    [facts, webhookUrl, audience, period, history, saveToHistory]
+    [audience, records, ranchName, settings, farmFilterMode, today, facts, webhookUrl, period, history, saveToHistory, collectionReady, getCycle]
   );
 
   if (report) {
     return (
       <div className="ai-assistant-view">
-        <ImpactReportView
-          report={report}
-          reused={reportReused}
-          onBack={() => {
-            setReport(null);
-            setError(null);
-          }}
-          onRegenerate={() => void runReport(true)}
-          regenerating={busy}
-          regenerateError={error}
-        />
+        {report.audience === 'farm' && report.farmData ? (
+          <FarmReportView
+            data={report.farmData}
+            webhookUrl={webhookUrl}
+            onBack={() => {
+              setReport(null);
+              setError(null);
+            }}
+          />
+        ) : (
+          <ImpactReportView
+            report={report}
+            reused={reportReused}
+            onBack={() => {
+              setReport(null);
+              setError(null);
+            }}
+            onRegenerate={() => void runReport(true)}
+            regenerating={busy}
+            regenerateError={error}
+          />
+        )}
       </div>
     );
   }
@@ -311,47 +376,74 @@ export const AIAssistantView: React.FC = () => {
         </TaskModal>
       )}
 
-      {/* 자원순환 임팩트 리포트 — AI 가 문장을 쓴다 */}
-      <section className="ai-request-card" aria-label="자원순환 임팩트 리포트 요청">
+      {/* 리포트 요청 카드 — 독자(목장 내부용 vs 대외 보고용)에 따라 최적화 */}
+      <section className="ai-request-card" aria-label="리포트 요청">
         <div className="ai-request-card__head">
           <div className="ai-request-card__icon" aria-hidden="true">
-            <BarChart3 className="w-5 h-5" />
+            {audience === 'farm' ? <Wheat className="w-5 h-5" /> : <BarChart3 className="w-5 h-5" />}
           </div>
           <InfoHeading
-            title={<h3>자원순환 임팩트 리포트</h3>}
-            label="자원순환 임팩트 리포트"
-            description={<p>수거량과 부숙 현황을 한 장의 리포트로 정리합니다.</p>}
-            note="수거량·절감액·부숙 현황 숫자는 기록에서 직접 계산하고, AI 가 요약과 다음 할 일을 문장으로 씁니다. 같은 기간·같은 자료로 만든 리포트는 새로 만들지 않고 저장본을 엽니다."
+            title={<h3>{audience === 'farm' ? '목장 내부용 현장 운영 보고서' : '자원순환 임팩트 리포트'}</h3>}
+            label={audience === 'farm' ? '목장 내부용 보고서' : '대외 보고용 리포트'}
+            description={
+              <p>
+                {audience === 'farm'
+                  ? '더미 축적량, 온도·함수율 변화, 곰팡이 및 오늘 해야 할 일을 카드형으로 요약합니다.'
+                  : '수거량과 부숙 현황을 한 장의 대외 보고서로 정리합니다.'}
+              </p>
+            }
+            note={
+              audience === 'farm'
+                ? '목장 내부용 보고서는 100% 부숙관리 현장 실측 데이터로 순수 코드가 즉시 연산합니다. AI 설명은 보고서 내에서 필요할 때만 ✦ 버튼으로 볼 수 있습니다.'
+                : '수거량·절감액 숫자는 기록에서 직접 계산하고, AI 가 요약과 다음 할 일을 문장으로 씁니다.'
+            }
           />
         </div>
 
         <div className="ai-request-card__fields">
-          <label>
-            <span>기간</span>
-            <select
-              value={periodKey}
-              onChange={event => {
-                const nextKey = event.target.value;
-                setPeriodKey(nextKey);
-                setDashboard(null);
-                setCollections(null);
-                setLoadedPeriodKey(null);
-                setError(null);
-              }}
-            >
-              {[...new Set(periods.map(p => p.year))].map(year => (
-                <optgroup key={year} label={`${year}년`}>
-                  {periods
-                    .filter(p => p.year === year)
-                    .map(item => (
-                      <option key={`${item.year}-${item.month}`} value={`${item.year}-${item.month}`}>
-                        {item.label}
-                      </option>
-                    ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
+          {audience === 'farm' ? (
+            <label>
+              <span>분석 기준</span>
+              <select
+                value={farmFilterMode}
+                onChange={event => setFarmFilterMode(event.target.value as any)}
+              >
+                <option value="current">현재 상태 (권장)</option>
+                <option value="7days">최근 7일</option>
+                <option value="30days">최근 30일</option>
+                <option value="90days">최근 3개월</option>
+                <option value="all">전체 기록</option>
+              </select>
+            </label>
+          ) : (
+            <label>
+              <span>기간</span>
+              <select
+                value={periodKey}
+                onChange={event => {
+                  const nextKey = event.target.value;
+                  setPeriodKey(nextKey);
+                  setDashboard(null);
+                  setCollections(null);
+                  setLoadedPeriodKey(null);
+                  setError(null);
+                }}
+              >
+                {[...new Set(periods.map(p => p.year))].map(year => (
+                  <optgroup key={year} label={`${year}년`}>
+                    {periods
+                      .filter(p => p.year === year)
+                      .map(item => (
+                        <option key={`${item.year}-${item.month}`} value={`${item.year}-${item.month}`}>
+                          {item.label}
+                        </option>
+                      ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          )}
+
           <label>
             <span>누가 읽나요</span>
             <select value={audience} onChange={event => setAudience(event.target.value as ReportAudience)}>
@@ -364,113 +456,178 @@ export const AIAssistantView: React.FC = () => {
           </label>
         </div>
 
-        {/* 선택한 기간의 수거 데이터 실시간 현황 카드 */}
-        <div className="rounded-2xl bg-black/[0.03] dark:bg-white/[0.04] border border-black/5 dark:border-white/10 p-3.5 flex flex-col gap-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${collectionReady && dashboard ? 'bg-[#315C36] dark:bg-[#34C759]' : 'bg-[#8E8E93]'}`} />
-              {period.label} 커피박 수거 현황
-            </span>
-            <div className="flex items-center gap-2">
-              <a
-                href={getCollectionSheetUrl(period.year, period.month)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[11px] font-bold text-[#315C36] dark:text-[#34C759] hover:underline"
-              >
-                🔗 시트 원본 ↗
-              </a>
+        {/* 독자에 따른 실시간 현황 카드 */}
+        {audience === 'farm' ? (
+          <div className="rounded-2xl bg-black/[0.03] dark:bg-white/[0.04] border border-black/5 dark:border-white/10 p-3.5 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-[#2D6A4F] dark:bg-[#4ADE80]" />
+                {ranchName} 현장 실시간 상태 지표
+              </span>
               <span className="text-[11px] text-[#8E8E93]">
-                {!collectionReady ? '조회 중...' : dashboard ? '수거 시트 연동' : '데이터 없음'}
+                {status.daysSinceLastVisit !== null ? `최근 점검 ${status.daysSinceLastVisit}일 전` : '기록 확인 중'}
               </span>
             </div>
-          </div>
 
-          {!collectionReady ? (
-            <div className="flex items-center gap-2 py-2 text-xs text-[#8E8E93]">
-              <Loader2 className="w-4 h-4 animate-spin text-[#315C36] dark:text-[#34C759]" />
-              <span>{period.label} 수거 데이터를 구글 시트에서 가져오는 중입니다...</span>
-            </div>
-          ) : dashboard ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
               <div className="bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10">
-                <span className="text-[10.5px] text-[#8E8E93] block font-medium">커피박 수거량</span>
-                <strong className="text-[15px] font-bold text-[#315C36] dark:text-[#34C759] block mt-0.5">
-                  {(dashboard.collection.totalKg / 1000).toLocaleString('ko-KR', { maximumFractionDigits: 2 })} t
+                <span className="text-[10.5px] text-[#8E8E93] block font-medium">추정 더미량</span>
+                <strong className="text-[15px] font-bold text-[#2D6A4F] dark:text-[#4ADE80] block mt-0.5">
+                  {status.currentPileKg.toLocaleString()} kg
                 </strong>
                 <span className="text-[10px] text-[#8E8E93] block">
-                  {Math.round(dashboard.collection.totalKg).toLocaleString('ko-KR')} kg
+                  {status.targetPileKg ? `목표 ${status.progressPercent}%` : '목표량 미설정'}
                 </span>
               </div>
               <div className="bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10">
-                <span className="text-[10.5px] text-[#8E8E93] block font-medium">수거 매장 수</span>
+                <span className="text-[10.5px] text-[#8E8E93] block font-medium">현재 함수율</span>
                 <strong className="text-[15px] font-bold text-[#1D1D1F] dark:text-[#F5F5F7] block mt-0.5">
-                  {dashboard.collection.activeStoreCount.toLocaleString('ko-KR')}곳
+                  {status.moisture !== null ? `${status.moisture}%` : '-'}
                 </strong>
-                <span className="text-[10px] text-[#8E8E93] block">해당 월 수거 참여</span>
+                <span className="text-[10px] text-[#8E8E93] block">
+                  {status.moistureTrend === 'decreasing' ? '감소 중' : status.moistureTrend === 'increasing' ? '상승 중' : '유지'}
+                </span>
               </div>
-              <div className="col-span-2 sm:col-span-1 bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10 flex sm:flex-col justify-between items-center sm:items-start">
-                <div>
-                  <span className="text-[10.5px] text-[#8E8E93] block font-medium">
-                    {dashboard.collection.isPartialMonth ? '전주차 대비' : '전월 대비'}
-                  </span>
-                  <strong
-                    className={`text-[13.5px] font-bold block mt-0.5 ${
-                      dashboard.collection.isPartialMonth && dashboard.collection.weeklyComparison?.changePercent != null
-                        ? dashboard.collection.weeklyComparison.changePercent > 0
-                          ? 'text-[#315C36] dark:text-[#34C759]'
-                          : dashboard.collection.weeklyComparison.changePercent < 0
-                            ? 'text-[#C5221F] dark:text-[#FF6961]'
-                            : 'text-[#1D1D1F] dark:text-[#F5F5F7]'
-                        : dashboard.collection.changePercent != null && dashboard.collection.changePercent > 0
-                          ? 'text-[#315C36] dark:text-[#34C759]'
-                          : dashboard.collection.changePercent != null && dashboard.collection.changePercent < 0
-                            ? 'text-[#C5221F] dark:text-[#FF6961]'
-                            : 'text-[#1D1D1F] dark:text-[#F5F5F7]'
-                    }`}
-                  >
-                    {dashboard.collection.isPartialMonth
-                      ? dashboard.collection.weeklyComparison?.changePercent != null
-                        ? `${dashboard.collection.weeklyComparison.changePercent > 0 ? '+' : ''}${dashboard.collection.weeklyComparison.changePercent.toFixed(1)}%`
-                        : '수거 진행 중'
-                      : dashboard.collection.changePercent != null
-                        ? `${dashboard.collection.changePercent > 0 ? '+' : ''}${dashboard.collection.changePercent.toFixed(1)}%`
-                        : '비교 기준 없음'}
+              <div className="bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10">
+                <span className="text-[10.5px] text-[#8E8E93] block font-medium">심부 온도</span>
+                <strong className="text-[15px] font-bold text-[#1D1D1F] dark:text-[#F5F5F7] block mt-0.5">
+                  {status.coreTemp !== null ? `${status.coreTemp}℃` : '-'}
+                </strong>
+                <span className="text-[10px] text-[#8E8E93] block">
+                  {status.tempTrend === 'decreasing' ? '안정화 중' : status.tempTrend === 'increasing' ? '상승 중' : '유지'}
+                </span>
+              </div>
+              <div className="bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10">
+                <span className="text-[10.5px] text-[#8E8E93] block font-medium">깔개 판정</span>
+                <strong className="text-[13.5px] font-bold text-[#1D1D1F] dark:text-[#F5F5F7] block mt-0.5">
+                  {status.stageTitle}
+                </strong>
+                <span className="text-[10px] text-[#8E8E93] block">
+                  곰팡이: {status.moldStatus ? MOLD_LABELS[status.moldStatus] : '없음'}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-black/[0.03] dark:bg-white/[0.04] border border-black/5 dark:border-white/10 p-3.5 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${collectionReady && dashboard ? 'bg-[#315C36] dark:bg-[#34C759]' : 'bg-[#8E8E93]'}`} />
+                {period.label} 커피박 수거 현황
+              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href={getCollectionSheetUrl(period.year, period.month)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] font-bold text-[#315C36] dark:text-[#34C759] hover:underline"
+                >
+                  🔗 시트 원본 ↗
+                </a>
+                <span className="text-[11px] text-[#8E8E93]">
+                  {!collectionReady ? '조회 중...' : dashboard ? '수거 시트 연동' : '데이터 없음'}
+                </span>
+              </div>
+            </div>
+
+            {!collectionReady ? (
+              <div className="flex items-center gap-2 py-2 text-xs text-[#8E8E93]">
+                <Loader2 className="w-4 h-4 animate-spin text-[#315C36] dark:text-[#34C759]" />
+                <span>{period.label} 수거 데이터를 구글 시트에서 가져오는 중입니다...</span>
+              </div>
+            ) : dashboard ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+                <div className="bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10">
+                  <span className="text-[10.5px] text-[#8E8E93] block font-medium">커피박 수거량</span>
+                  <strong className="text-[15px] font-bold text-[#315C36] dark:text-[#34C759] block mt-0.5">
+                    {(dashboard.collection.totalKg / 1000).toLocaleString('ko-KR', { maximumFractionDigits: 2 })} t
                   </strong>
-                  <span className="text-[10px] text-[#8E8E93] block mt-0.5">
-                    {dashboard.collection.isPartialMonth && dashboard.collection.samePeriodComparison?.changePercent != null
-                      ? `동기간 대비 ${dashboard.collection.samePeriodComparison.changePercent > 0 ? '+' : ''}${dashboard.collection.samePeriodComparison.changePercent.toFixed(1)}%`
-                      : dashboard.collection.isPartialMonth
-                        ? '주차 진행 중'
-                        : '전월 실적 대비'}
+                  <span className="text-[10px] text-[#8E8E93] block">
+                    {Math.round(dashboard.collection.totalKg).toLocaleString('ko-KR')} kg
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowDashboardModal(true)}
-                  className="mt-1 inline-flex items-center gap-1 text-[11.5px] font-bold text-[#315C36] dark:text-[#34C759] hover:underline cursor-pointer"
-                >
-                  <BarChart3 className="w-3.5 h-3.5" />
-                  <span>상세 대시보드 ↗</span>
-                </button>
+                <div className="bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10">
+                  <span className="text-[10.5px] text-[#8E8E93] block font-medium">수거 매장 수</span>
+                  <strong className="text-[15px] font-bold text-[#1D1D1F] dark:text-[#F5F5F7] block mt-0.5">
+                    {dashboard.collection.activeStoreCount.toLocaleString('ko-KR')}곳
+                  </strong>
+                  <span className="text-[10px] text-[#8E8E93] block">해당 월 수거 참여</span>
+                </div>
+                <div className="col-span-2 sm:col-span-1 bg-white dark:bg-[#1C1C1E] p-2.5 rounded-xl border border-black/5 dark:border-white/10 flex sm:flex-col justify-between items-center sm:items-start">
+                  <div>
+                    <span className="text-[10.5px] text-[#8E8E93] block font-medium">
+                      {dashboard.collection.isPartialMonth ? '전주차 대비' : '전월 대비'}
+                    </span>
+                    <strong
+                      className={`text-[13.5px] font-bold block mt-0.5 ${
+                        dashboard.collection.isPartialMonth && dashboard.collection.weeklyComparison?.changePercent != null
+                          ? dashboard.collection.weeklyComparison.changePercent > 0
+                            ? 'text-[#315C36] dark:text-[#34C759]'
+                            : dashboard.collection.weeklyComparison.changePercent < 0
+                              ? 'text-[#C5221F] dark:text-[#FF6961]'
+                              : 'text-[#1D1D1F] dark:text-[#F5F5F7]'
+                          : dashboard.collection.changePercent != null && dashboard.collection.changePercent > 0
+                            ? 'text-[#315C36] dark:text-[#34C759]'
+                            : dashboard.collection.changePercent != null && dashboard.collection.changePercent < 0
+                              ? 'text-[#C5221F] dark:text-[#FF6961]'
+                              : 'text-[#1D1D1F] dark:text-[#F5F5F7]'
+                      }`}
+                    >
+                      {dashboard.collection.isPartialMonth
+                        ? dashboard.collection.weeklyComparison?.changePercent != null
+                          ? `${dashboard.collection.weeklyComparison.changePercent > 0 ? '+' : ''}${dashboard.collection.weeklyComparison.changePercent.toFixed(1)}%`
+                          : '수거 진행 중'
+                        : dashboard.collection.changePercent != null
+                          ? `${dashboard.collection.changePercent > 0 ? '+' : ''}${dashboard.collection.changePercent.toFixed(1)}%`
+                          : '비교 기준 없음'}
+                    </strong>
+                    <span className="text-[10px] text-[#8E8E93] block mt-0.5">
+                      {dashboard.collection.isPartialMonth && dashboard.collection.samePeriodComparison?.changePercent != null
+                        ? `동기간 대비 ${dashboard.collection.samePeriodComparison.changePercent > 0 ? '+' : ''}${dashboard.collection.samePeriodComparison.changePercent.toFixed(1)}%`
+                        : dashboard.collection.isPartialMonth
+                          ? '주차 진행 중'
+                          : '전월 실적 대비'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDashboardModal(true)}
+                    className="mt-1 inline-flex items-center gap-1 text-[11.5px] font-bold text-[#315C36] dark:text-[#34C759] hover:underline cursor-pointer"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>상세 대시보드 ↗</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="py-2 text-xs text-[#8E8E93]">
-              해당 월은 수거관리 시트에 등록된 데이터가 없습니다. (부숙관리 현장 하역 기록 기준으로 작성됩니다)
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="py-2 text-xs text-[#8E8E93]">
+                해당 월은 수거관리 시트에 등록된 데이터가 없습니다. (부숙관리 현장 하역 기록 기준으로 작성됩니다)
+              </div>
+            )}
+          </div>
+        )}
 
         <button
           type="button"
           className="ai-request-card__run"
           onClick={() => void runReport(false)}
-          disabled={busy || !collectionReady}
+          disabled={busy || (audience === 'official' && !collectionReady)}
         >
-          {busy || !collectionReady ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          {busy ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : audience === 'farm' ? (
+            <Layers className="w-4 h-4" />
+          ) : (
+            <Sparkles className="w-4 h-4" />
+          )}
           <span>
-            {busy ? '표준 보고서를 생성하는 중입니다...' : !collectionReady ? '수거 자료 확인 중' : '표준 월간 현황 보고서 보기 ✦'}
+            {busy
+              ? '보고서를 생성하는 중입니다...'
+              : audience === 'farm'
+                ? `${ranchName} 목장 내부용 현장 보고서 보기`
+                : !collectionReady
+                  ? '수거 자료 확인 중'
+                  : '표준 월간 현황 보고서 보기 ✦'}
           </span>
         </button>
 
@@ -503,9 +660,20 @@ export const AIAssistantView: React.FC = () => {
                 >
                   <FileText className="w-4 h-4" />
                   <span className="ai-history__title">{item.sections.headline}</span>
-                  <span className="ai-history__meta">
-                    {item.facts.period.label} · {AUDIENCE_LABELS[item.audience]}
-                  </span>
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        item.audience === 'farm'
+                          ? 'bg-[#2D6A4F]/15 text-[#2D6A4F] dark:bg-[#4ADE80]/20 dark:text-[#4ADE80]'
+                          : 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
+                      }`}
+                    >
+                      {item.audience === 'farm' ? '목장용' : '대외용'}
+                    </span>
+                    <span className="ai-history__meta text-[11px] text-[#8E8E93]">
+                      {new Date(item.createdAt).toLocaleDateString('ko-KR')}
+                    </span>
+                  </div>
                 </button>
                 <button
                   type="button"

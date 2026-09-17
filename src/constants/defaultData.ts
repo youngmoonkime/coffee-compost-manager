@@ -32,7 +32,7 @@ export const DEFAULT_RANCH_NAME = '건준목장';
 
 /** 환경변수가 없을 때 쓰는 부숙관리 주소 (지금까지 쓰던 배포본) */
 const COMPOST_GAS_FALLBACK =
-  'https://script.google.com/macros/s/AKfycbwQnP6v4KYzC19Jy06UQd0_ITVeuKjFqfMl2LxkDE6DGU6XEW8eLpFfBrnUBfIC5Cim/exec';
+  'https://script.google.com/macros/s/AKfycbwPJaUeGTnKfD4RBfi5Nq3080UKq8m2ubYWWybl1bj_RxAaKxktnXuUZR1Y710m45cE/exec';
 
 /**
  * 부숙관리 구글 시트("커피박 부숙 관리 대장")의 Apps Script 웹 앱 주소.

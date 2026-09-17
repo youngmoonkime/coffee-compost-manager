@@ -1,4 +1,4 @@
-import { factsForAudience, type ImpactFacts, type StandardReportFacts } from './reportData';
+import { factsForAudience, type ImpactFacts, type StandardReportFacts, type FarmReportData } from './reportData';
 import { withAccessCode } from './accessCode';
 
 /**
@@ -44,7 +44,7 @@ export const AI_ERROR_MESSAGES: Record<Exclude<AiErrorCode, 'failed'>, string> =
     'Apps Script 에 외부 서비스 연결 권한이 없습니다. 편집기에서 setupAiAccess 를 한 번 실행해 허용한 뒤 새 버전으로 배포해주세요.',
   rate_limited: 'AI 서버가 혼잡합니다. 잠시 뒤 다시 시도해주세요.',
   daily_limit: '오늘 AI 설명 사용 횟수를 모두 사용했습니다.',
-  outdated_script: 'AI 기능을 쓰려면 Apps Script 를 최신본(v20)으로 재배포해주세요.',
+  outdated_script: 'AI 기능을 쓰려면 Apps Script 를 최신본(v21)으로 재배포해주세요.',
 };
 
 export interface AiUsage {
@@ -405,6 +405,133 @@ export async function requestStandardImpactReport(
   return {
     success: true,
     sections,
+    model: isNonEmptyText(result.body.model) ? (result.body.model as string) : 'Gemini AI',
+    ...readUsage(result.body),
+  };
+}
+
+/* ─────────────────── 목장 내부용 AI 설명 (온디맨드 2~4문장) ─────────────────── */
+
+export interface FarmAiExplanationResult extends AiUsage {
+  success: boolean;
+  explanation: string;
+  model?: string;
+  message?: string;
+  code?: AiErrorCode;
+}
+
+/**
+ * AI 없이도 100% 매끄럽게 동작하는 2~4문장 규칙 기반 설명 문장 생성기
+ */
+export function generateFallbackFarmAiExplanation(data: FarmReportData): string {
+  const sentences: string[] = [];
+
+  // 1. 수분 및 온도 상태
+  if (data.condition.moisture !== null && data.condition.temperature !== null) {
+    const moisturePart =
+      data.condition.moistureTrend === 'falling'
+        ? `현재 함수율은 ${data.condition.moisture}%로 감소 추세를 보이고 있으며`
+        : `현재 함수율은 ${data.condition.moisture}% 수준이며`;
+    const tempPart =
+      data.condition.temperatureTrend === 'stabilizing'
+        ? `심부 온도(${data.condition.temperature}℃)도 안정화 방향을 유지하고 있습니다.`
+        : `심부 온도는 ${data.condition.temperature}℃입니다.`;
+    sentences.push(`${moisturePart} ${tempPart}`);
+  } else {
+    sentences.push('현재 더미의 부숙 상태 및 환경 지표가 관리 중입니다.');
+  }
+
+  // 2. 관리 및 곰팡이
+  if (data.condition.moldStatus === 'partial' || data.condition.moldStatus === 'spreading') {
+    sentences.push('더미에서 곰팡이가 확인되었으므로 추가 혼합을 통한 통기 작업이 시급합니다.');
+  } else {
+    const mixPart =
+      data.management.mixingCountLast7Days >= 2
+        ? `최근 7일간 혼합 작업도 ${data.management.mixingCountLast7Days}회 진행되어 관리 기준을 충족하고 있으며`
+        : `최근 7일간 혼합 작업은 ${data.management.mixingCountLast7Days}회로 추가 혼합을 권장하며`;
+    sentences.push(`${mixPart} 곰팡이 발견 기록은 없습니다.`);
+  }
+
+  // 3. 결론 및 다음 조치
+  if (data.bedding.status === 'candidate') {
+    sentences.push('더미 상태가 전반적으로 안정화되었으므로 신규 투입 전 축사 깔개로 일부 사용을 검토할 수 있습니다.');
+  } else if (data.bedding.status === 'preparing') {
+    sentences.push('다음 방문에서 상태를 재확인한 뒤 깔개 사용 여부를 검토하는 것이 좋습니다.');
+  } else {
+    sentences.push('정기적인 혼합과 수분 조절을 유지하며 부숙 경과를 지속 관찰하시기 바랍니다.');
+  }
+
+  return sentences.join(' ');
+}
+
+/**
+ * 목장 내부용 AI 설명 온디맨드 요청
+ * - 사용자가 [AI 설명 보기 ✦]를 눌렀을 때만 최소 facts로 호출
+ * - 2~4문장 요약으로 엄격 제한
+ */
+export async function requestFarmAiExplanation(
+  webhookUrl: string,
+  data: FarmReportData
+): Promise<FarmAiExplanationResult> {
+  const fallback = generateFallbackFarmAiExplanation(data);
+
+  if (!webhookUrl) {
+    return {
+      success: true,
+      explanation: fallback,
+      model: '규칙 기반(Offline)',
+    };
+  }
+
+  // 최소 facts만 추림 (사용자 명세 26번 기준)
+  const payloadFacts = {
+    farmName: data.farm.name,
+    pile: {
+      currentKg: data.pile.currentKg,
+      targetKg: data.pile.targetKg,
+    },
+    condition: {
+      temperature: data.condition.temperature,
+      temperatureTrend: data.condition.temperatureTrend,
+      moisture: data.condition.moisture,
+      moistureTrend: data.condition.moistureTrend,
+      moldStatus: data.condition.moldStatus,
+    },
+    management: {
+      mixingCountLast7Days: data.management.mixingCountLast7Days,
+      daysSinceLastMixing: data.management.daysSinceLastMixing,
+      visitCountLast7Days: data.management.visitCountLast7Days,
+    },
+    beddingStatus: data.bedding.status,
+    recommendedActions: data.actions.map(a => a.title),
+  };
+
+  const result = await postAiRequest(webhookUrl, {
+    eventType: 'farm_ai_explanation',
+    audience: 'farm',
+    facts: payloadFacts,
+  });
+
+  if (!result.ok || !result.body) {
+    return {
+      success: true,
+      explanation: fallback,
+      message: result.message,
+      model: '규칙 기반(Fallback)',
+      ...(result.usage || {}),
+    };
+  }
+
+  const rawText = readAiText(
+    (result.body.sections as Record<string, unknown>)?.summary ||
+      (result.body.sections as Record<string, unknown>)?.meaning ||
+      result.body.explanation ||
+      result.body.text
+  );
+
+  return {
+    success: true,
+    explanation: rawText || fallback,
     model: isNonEmptyText(result.body.model) ? (result.body.model as string) : 'Gemini AI',
     ...readUsage(result.body),
   };

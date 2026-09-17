@@ -111,12 +111,17 @@ export function decideBedding(status: CycleStatus): BeddingDecision {
     return build('hold', status.stageReason, next);
   }
 
-  if (measured.length === 0 || !status.targetPileKg) {
-    const next =
-      measured.length === 0
-        ? '현장 점검에서 심부 3지점 온도·함수율을 측정해주세요.'
-        : '설정에서 목장별 깔개 목표량을 정해주세요.';
-    return build('insufficient', missing[0] ?? '판정에 필요한 자료가 부족합니다.', next);
+  if (measured.length === 0) {
+    return build(
+      'insufficient',
+      '심부 온도·함수율 측정이 없어 판정할 수 없습니다.',
+      '현장 점검에서 심부 3지점 온도·함수율을 측정해주세요.'
+    );
+  }
+
+  // 목표량이 없는 것은 오류가 아니다 — 상태로 판정하고(사용 후보는 되지 않음), 목표량 설정을 권한다
+  if (!status.targetPileKg) {
+    return build(status.stage === 'accumulating' ? 'accumulating' : 'managing', status.stageReason, '설정에서 목장별 깔개 목표량을 정해주세요.');
   }
 
   switch (status.stage) {

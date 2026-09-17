@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import type { ReportAudience, ReportSections, StandardAiSections } from '../../services/aiReport';
 import { generateFallbackAiSections } from '../../services/aiReport';
-import type { ImpactFacts, StandardReportFacts } from '../../services/reportData';
+import type { ImpactFacts, StandardReportFacts, FarmReportData } from '../../services/reportData';
 import { buildStandardReportFacts } from '../../services/reportData';
 
 export interface SavedReport {
@@ -24,6 +24,7 @@ export interface SavedReport {
   factsKey?: string;
   sections: ReportSections;
   standardSections?: StandardAiSections;
+  farmData?: FarmReportData;
 }
 
 interface Props {
