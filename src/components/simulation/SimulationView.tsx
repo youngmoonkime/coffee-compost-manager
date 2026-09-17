@@ -1010,79 +1010,27 @@ export const SimulationView: React.FC = () => {
     };
     wide.addEventListener('change', handleWide);
 
-    // 더보기 메뉴 및 상단 액션
-    const menuEl = root.querySelector<HTMLDivElement>('#apple-menu');
-    const moreBtn = root.querySelector<HTMLButtonElement>('#apple-more');
-    const closeMenu = () => menuEl?.classList.remove('open');
-
-    moreBtn?.addEventListener('click', e => {
-      e.stopPropagation();
-      menuEl?.classList.toggle('open');
-    });
-
-    const handleDocClick = (e: MouseEvent) => {
-      if (menuEl && !menuEl.contains(e.target as Node) && e.target !== moreBtn) {
-        closeMenu();
+    // 축사 설정 열기 버튼 연동
+    root.querySelector('#bm-open-settings')?.addEventListener('click', () => {
+      if (isMobile()) {
+        setSheet(true);
+      } else {
+        inspector.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
-    };
-    document.addEventListener('click', handleDocClick);
+    });
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        closeMenu();
         setSheet(false);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
 
-    root.querySelector('#apple-open-inspector')?.addEventListener('click', () => {
-      closeMenu();
-      if (isMobile()) {
-        setSheet(true);
-      } else {
-        inspector.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    });
-
-    root.querySelector('#apple-show-code')?.addEventListener('click', () => {
-      closeMenu();
-      const details = root.querySelector<HTMLDetailsElement>('details.panel');
-      if (details) {
-        details.open = true;
-        details.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
-
-    root.querySelector('#apple-help')?.addEventListener('click', () => {
-      closeMenu();
-      alert(
-        '3D 화면을 드래그해 회전하고, 축사·센서·통로·도포 지점을 선택해 값을 조정하세요. 결과는 연구 상대 변화율을 적용한 참고 시뮬레이션이며 실측 예측값이 아닙니다.'
-      );
-    });
-
-    // 뒤로가기 버튼: 오늘 탭으로 이동
-    root.querySelector('.apple-back')?.addEventListener('click', () => {
-      handlersRef.current.setActiveTab('today');
-    });
-
-    // 테마 토글 버튼
-    const themeBtn = root.querySelector<HTMLButtonElement>('#apple-theme');
-    const updateThemeIcon = () => {
-      if (themeBtn) {
-        themeBtn.textContent = document.documentElement.classList.contains('dark') ? '☾' : '☀';
-      }
-    };
     // 테마가 바뀌면 색만 다시 읽어 그린다 — 시뮬레이션 상태는 그대로 둔다
     const refreshTheme = () => {
-      updateThemeIcon();
       colorCache.clear();
       requestDraw();
     };
-    themeBtn?.addEventListener('click', () => {
-      handlersRef.current.toggleTheme();
-      setTimeout(refreshTheme, 50);
-    });
-    updateThemeIcon();
     redrawRef.current = refreshTheme;
 
     const resizeObserver = new ResizeObserver(() => {
@@ -1103,7 +1051,6 @@ export const SimulationView: React.FC = () => {
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointercancel', handlePointerUp);
       canvas.removeEventListener('lostpointercapture', handlePointerUp);
-      document.removeEventListener('click', handleDocClick);
       document.removeEventListener('keydown', handleKeyDown);
       wide.removeEventListener('change', handleWide);
       viewHost?.classList.remove('barn-view-host');
@@ -1121,38 +1068,13 @@ export const SimulationView: React.FC = () => {
 
   return (
     <div id="barn-module" ref={containerRef}>
-      {/* 상단 네비게이션 헤더 */}
+      {/* 상단 네비게이션 헤더: 박스형이 아닌 슬림한 인라인 헤더로 공간 최적화 */}
       <header className="apple-header">
         <div className="apple-header-left">
-          <button type="button" className="apple-back" aria-label="이전 화면">
-            <span aria-hidden="true">‹</span>
-          </button>
           <div className="apple-title-wrap">
             <div className="apple-title">축사 시뮬레이션</div>
             <div className="apple-subtitle" id="apple-barn-subtitle">
               현재 축사
-            </div>
-          </div>
-        </div>
-        <div className="apple-actions">
-          <button type="button" className="apple-icon-btn" id="apple-theme" aria-label="라이트/다크 모드 전환">
-            ☀
-          </button>
-          <div className="apple-more-wrap">
-            <button type="button" className="apple-icon-btn" id="apple-more" aria-label="더보기 메뉴 열기">
-              •••
-            </button>
-            <div className="apple-menu" id="apple-menu" role="menu">
-              <button type="button" id="apple-open-inspector" role="menuitem">
-                선택 항목 설정
-              </button>
-              <button type="button" id="apple-show-code" role="menuitem">
-                현재 설정 코드 보기
-              </button>
-              <hr />
-              <button type="button" id="apple-help" role="menuitem">
-                사용 안내
-              </button>
             </div>
           </div>
         </div>
@@ -1167,6 +1089,9 @@ export const SimulationView: React.FC = () => {
           </label>
           <button id="bm-add" className="cursor-interaction" type="button">
             축사 추가
+          </button>
+          <button id="bm-open-settings" className="cursor-interaction" type="button">
+            ⚙ 축사 설정
           </button>
           <button id="bm-remove" className="cursor-interaction" type="button">
             선택 축사 삭제

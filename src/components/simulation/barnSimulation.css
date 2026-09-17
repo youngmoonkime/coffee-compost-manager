@@ -58,47 +58,33 @@
 }
 
 #barn-module .apple-header {
-  position: sticky;
-  top: 0;
-  z-index: 40;
+  position: static;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin: -16px -20px 20px;
-  padding: 14px 20px;
-  background: color-mix(in srgb, var(--app-bg) 82%, transparent);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border-bottom: 1px solid var(--divider);
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 2px 0 6px;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom: none;
 }
 
 #barn-module .apple-header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 #barn-module .apple-back,
-#barn-module .apple-icon-btn {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 0 !important;
-  border-radius: 50% !important;
-  background: var(--surface-2) !important;
-  color: var(--text) !important;
-  padding: 0 !important;
-  box-shadow: none !important;
-  cursor: pointer;
-  transition: transform 0.15s ease;
-}
-
-#barn-module .apple-back:active,
-#barn-module .apple-icon-btn:active {
-  transform: scale(0.95);
+#barn-module .apple-actions,
+#barn-module .apple-more-wrap,
+#barn-module .apple-menu,
+#barn-module #apple-theme,
+#barn-module #apple-more {
+  display: none !important;
 }
 
 #barn-module .apple-title-wrap {
@@ -106,30 +92,20 @@
 }
 
 #barn-module .apple-title {
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.035em;
-  line-height: 1.1;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
   color: var(--text);
 }
 
 #barn-module .apple-subtitle {
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-#barn-module .apple-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-#barn-module .apple-more-wrap {
-  position: relative;
 }
 
 #barn-module .apple-menu {
@@ -223,6 +199,14 @@
   font-weight: 700;
 }
 
+#barn-module .barn-toolbar #bm-open-settings {
+  background: var(--surface-2) !important;
+  color: var(--brand) !important;
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent) !important;
+  font-weight: 600;
+  padding: 0 14px !important;
+}
+
 #barn-module .barn-toolbar #bm-remove {
   background: var(--surface-2) !important;
   color: var(--danger) !important;
@@ -271,7 +255,10 @@
 
 #barn-module .inspector {
   position: sticky;
-  top: 92px;
+  top: 72px;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px;
 }
 
@@ -641,14 +628,14 @@
     padding: 14px 14px 42px;
   }
   #barn-module .apple-header {
-    margin: -14px -14px 16px;
-    padding: 12px 14px;
+    margin: 0 0 10px;
+    padding: 0 0 4px;
   }
   #barn-module .apple-title {
-    font-size: 23px;
+    font-size: 18px;
   }
   #barn-module .barn-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
   #barn-module .barn-toolbar #bm-remove {
     display: none;
@@ -664,7 +651,7 @@
   }
   /*
    * 휴대폰에서는 설정 칸을 본문에 길게 늘어놓지 않는다.
-   * 3D 화면의 [축사 설정] 같은 지점을 누르면 아래에서 팝업으로 올라온다.
+   * 3D 화면의 [축사 설정] 같은 지점이나 툴바의 [⚙ 축사 설정]을 누르면 아래에서 팝업으로 올라온다.
    */
   #barn-module .inspector {
     position: fixed !important;
@@ -676,7 +663,7 @@
     margin: 0 !important;
     padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
     border-radius: 26px 26px 0 0 !important;
-    max-height: 62vh;
+    max-height: 82vh;
     overflow: auto;
     overscroll-behavior: contain;
     transform: translateY(100%);
@@ -764,23 +751,25 @@
 
 @media (max-width: 520px) {
   #barn-module .apple-back {
-    display: none;
+    display: none !important;
   }
   #barn-module .apple-header-left {
     gap: 0;
   }
   #barn-module .apple-title {
-    font-size: 21px;
+    font-size: 17px;
   }
   #barn-module .apple-subtitle {
-    max-width: 185px;
+    max-width: 200px;
   }
   #barn-module .barn-toolbar {
-    grid-template-columns: 1fr auto;
-    padding: 14px !important;
+    grid-template-columns: 1fr auto auto;
+    padding: 12px !important;
   }
-  #barn-module .barn-toolbar #bm-add {
-    padding: 0 12px !important;
+  #barn-module .barn-toolbar #bm-add,
+  #barn-module .barn-toolbar #bm-open-settings {
+    padding: 0 10px !important;
+    font-size: 13px;
   }
   #barn-module .editor-layout > .panel:first-child {
     padding: 10px !important;
