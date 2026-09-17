@@ -33,9 +33,9 @@ export const DesktopSidebar: React.FC = () => {
     : allFieldNavItems;
 
   const analysisNavItems: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
-    { id: 'simulation', label: '축사 시뮬레이션', icon: Sparkles },
     { id: 'assistant', label: '지소행 AI 어시스턴트', icon: Bot },
     { id: 'impact', label: '수거 & 임팩트', icon: BarChart3 },
+    { id: 'simulation', label: '축사 시뮬레이션', icon: Sparkles },
   ];
 
   const managementNavItems: { id: ActiveTab; label: string; icon: React.ElementType }[] = [
