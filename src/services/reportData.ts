@@ -1398,7 +1398,8 @@ export function buildFarmReportData({
   const decision = decideBedding(summarizeCycle({ records, ranchName: normName, settings, cycle, today }));
   beddingStatus = decision.key;
   beddingStatusLabel = decision.label;
-  beddingNotice = `${decision.reason} ${decision.nextAction}`.trim();
+  // 판정 이유에 이미 할 일이 담겨 있다 — nextAction 까지 붙이면 같은 안내가 두 번 나온다
+  beddingNotice = decision.reason;
 
   // 8. 지금 해야 할 일 TOP 3 (우선순위 기반 자동 생성)
   const actions: FarmReportAction[] = [];

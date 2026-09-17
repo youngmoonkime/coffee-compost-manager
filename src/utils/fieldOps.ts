@@ -275,8 +275,9 @@ export function summarizeCycle({
   // ── 추이 (측정값이 있는 기록만) ──
   const measured = cycleRecords.filter(r => r.moisture > 0 || r.coreTemp > 0);
   const window = measured.slice(-FIELD_OPS.trendPoints);
-  const moisturePoints = window.map(r => r.moisture);
-  const tempPoints = window.map(r => r.coreTemp);
+  // 재지 않은 값(0)은 빼야 한다 — 온도가 [0, 0, 0] 이면 '안정'으로 읽혀 함수율만으로 사용 후보가 된다
+  const moisturePoints = window.map(r => r.moisture).filter(v => v > 0);
+  const tempPoints = window.map(r => r.coreTemp).filter(v => v > 0);
   const moistureTrend = readTrend(moisturePoints, FIELD_OPS.moistureSteadyBand);
   const tempTrend = readTrend(tempPoints, FIELD_OPS.tempSteadyBand);
   // 첫 점은 비교 기준일 뿐이라, 그 뒤에 부은 커피박만 값이 움직인 이유가 된다
