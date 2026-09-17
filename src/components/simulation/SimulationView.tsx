@@ -117,6 +117,22 @@ export const SimulationView: React.FC = () => {
     let yaw = 35;
     let pointer: number | null = null;
     let px = 0;
+
+    /*
+     * 3D 화면에서 축사를 직접 옮기고 크기를 바꾼다.
+     * 화면은 모든 축사가 들어오도록 자동으로 확대·축소되는데, 끄는 동안 그 비율이 바뀌면
+     * 손가락 아래에서 축사가 미끄러지므로 끄는 동안에는 마지막 비율을 고정한다.
+     */
+    type ViewFit = { cx: number; cy: number; scale: number };
+    let lastFit: ViewFit | null = null;
+    let lockedFit: ViewFit | null = null;
+    type GripKind = 'length' | 'width' | 'corner' | 'height';
+    let grips: { kind: GripKind; x: number; y: number }[] = [];
+    type DragMode =
+      | { mode: 'view' }
+      | { mode: 'move'; offX: number; offY: number }
+      | { mode: GripKind; startHeight: number; startY: number };
+    let drag: DragMode | null = null;
     let frame = 0;
     let activePart = 'barn';
     let sensorIndex = 0;
@@ -318,6 +334,8 @@ export const SimulationView: React.FC = () => {
     function selectPart(part: string, id = selected) {
       if (part === 'b') part = 'a';
       activePart = part;
+      // 축사를 끌어 옮길 때는 위아래로 움직여도 페이지가 스크롤되지 않게 한다
+      cvs.style.touchAction = part === 'barn' ? 'none' : '';
       if (id !== selected) {
         selected = id;
         load();
@@ -455,6 +473,53 @@ export const SimulationView: React.FC = () => {
       ];
     }
 
+    const snap = (v: number, step = 0.5) => Math.round(v / step) * step;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+    /** 화면의 점 → 바닥(높이 0)의 좌표(m). 그리기와 같은 투영을 거꾸로 푼다 */
+    function toGround(sx: number, sy: number): [number, number] | null {
+      const f = lockedFit ?? lastFit;
+      if (!f) return null;
+      const theta = (yaw * Math.PI) / 180;
+      const u = (sx - cvs.clientWidth / 2) / f.scale + f.cx;
+      const v = ((sy - cvs.clientHeight / 2) / f.scale + f.cy) / 0.48;
+      return [u * Math.cos(theta) + v * Math.sin(theta), -u * Math.sin(theta) + v * Math.cos(theta)];
+    }
+
+    /** 바닥 좌표 → 축사 안의 좌표 (앞→뒤, 좌→우) */
+    function toLocal(b: BarnData, gx: number, gy: number): [number, number] {
+      const t = (b.turn * Math.PI) / 180;
+      const dx = gx - b.x;
+      const dy = gy - b.y;
+      return [dx * Math.cos(t) + dy * Math.sin(t), -dx * Math.sin(t) + dy * Math.cos(t)];
+    }
+
+    /** 누른 곳에 있는 축사 — 선택된 축사를 먼저 본다 */
+    function barnAt(sx: number, sy: number): BarnData | null {
+      const g = toGround(sx, sy);
+      if (!g) return null;
+      const order = [current(), ...barns.filter(t => t.id !== selected)];
+      return (
+        order.find(t => {
+          const [lx, ly] = toLocal(t, g[0], g[1]);
+          return lx >= 0 && lx <= t.length && ly >= 0 && ly <= t.width;
+        }) ?? null
+      );
+    }
+
+
+
+    /** 3D 화면에서 바꾼 값을 오른쪽 입력칸에도 보여 준다 */
+    function syncBarnInputs() {
+      const b = current();
+      (['length', 'width', 'x', 'y', 'turn', 'height'] as const).forEach(k => {
+        const el = q<HTMLInputElement | HTMLSelectElement>(k);
+        if (el) el.value = String(b[k]);
+      });
+      const errEl = q('error');
+      if (errEl) errEl.textContent = '';
+    }
+
     function draw() {
       hotButtons.forEach(btn => (btn.dataset.live = '0'));
       const b = current();
@@ -495,14 +560,16 @@ export const SimulationView: React.FC = () => {
       const xmax = Math.max(...xs);
       const ymin = Math.min(...ys);
       const ymax = Math.max(...ys);
-      const scale = Math.min((W - 64) / (xmax - xmin || 1), (H - 72) / (ymax - ymin || 1));
+      const fit: ViewFit = lockedFit ?? {
+        cx: (xmin + xmax) / 2,
+        cy: (ymin + ymax) / 2,
+        scale: Math.min((W - 64) / (xmax - xmin || 1), (H - 72) / (ymax - ymin || 1)),
+      };
+      lastFit = fit;
 
       const P = (t: BarnData, x: number, y: number, z = 0): [number, number] => {
         const a = raw(world(t, x, y, z));
-        return [
-          W / 2 + (a[0] - (xmin + xmax) / 2) * scale,
-          H / 2 + (a[1] - (ymin + ymax) / 2) * scale,
-        ];
+        return [W / 2 + (a[0] - fit.cx) * fit.scale, H / 2 + (a[1] - fit.cy) * fit.scale];
       };
 
       for (const t of barns) {
@@ -742,15 +809,6 @@ export const SimulationView: React.FC = () => {
         c2d.fillRect(tx - tw / 2 - 4, ty - 14, tw + 8, 20);
         c2d.fillStyle = ink;
         c2d.fillText(text, tx, ty);
-
-        hotspot('sensor-' + i, sen.name + ' 편집', p[0], p[1] + 20, 'a', b.id);
-        const btn = hotButtons.get('sensor-' + i);
-        if (btn) {
-          btn.onclick = () => {
-            sensorIndex = i;
-            selectPart('a');
-          };
-        }
       });
 
       const dimEl = q('dim');
@@ -802,17 +860,41 @@ export const SimulationView: React.FC = () => {
         );
       }
 
-      for (const [key, label, x, y, z] of [
-        ['bedding', '도포 설정', b.length * 0.5, b.width * 0.85, 0.1],
-        ['passage', '통로 설정', b.length * 0.5, b.width * 0.15, 0.1],
-      ] as const) {
-        const p = P(b, x, y, z);
-        hotspot(key, label, p[0], p[1] + 22, key, b.id);
-      }
-
+      grips = [];
       if (activePart === 'barn') {
         stroke(b, [[0, 0], [b.length, 0], [b.length, b.width], [0, b.width], [0, 0]], ink, [], 2.5);
+
+        // 끌어서 크기·높이를 바꾸는 점 — 흰 점, 모서리는 네모
+        const gripAt = (kind: GripKind, label: string, x: number, y: number, z: number) => {
+          const p = P(b, x, y, z);
+          grips.push({ kind, x: p[0], y: p[1] });
+          c2d.beginPath();
+          if (kind === 'corner') c2d.rect(p[0] - 7, p[1] - 7, 14, 14);
+          else c2d.arc(p[0], p[1], 7, 0, Math.PI * 2);
+          c2d.fillStyle = '#ffffff';
+          c2d.fill();
+          c2d.strokeStyle = ink;
+          c2d.lineWidth = 2;
+          c2d.stroke();
+          c2d.font = '600 11px Pretendard, system-ui';
+          c2d.fillStyle = ink;
+          c2d.textAlign = 'left';
+          c2d.fillText(label, p[0] + 11, p[1] + 4);
+        };
+        stroke(b, [[0, b.width / 2, b.height + 2], [0, b.width / 2, 0]], ink, [3, 4]);
+        gripAt('length', '길이', b.length, b.width / 2, 0);
+        gripAt('width', '폭', b.length / 2, b.width, 0);
+        gripAt('corner', '크기', b.length, b.width, 0);
+        gripAt('height', '높이', 0, b.width / 2, b.height + 2);
       }
+
+      // 흰 조절점 바로 위에 뜬 설정 버튼은 잠시 숨겨, 조절점을 누를 수 있게 한다
+      hotButtons.forEach((btn, key) => {
+        const blocking =
+          key !== 'rotate' &&
+          grips.some(g => Math.hypot(g.x - parseFloat(btn.style.left), g.y - parseFloat(btn.style.top)) < 34);
+        btn.style.visibility = blocking ? 'hidden' : '';
+      });
 
       hotButtons.forEach((btn, key) => {
         if (btn.dataset.live !== '1') {
@@ -840,7 +922,7 @@ export const SimulationView: React.FC = () => {
       const factor = calcFactor();
       const change = (factor - 1) * 100;
       const mass = Number(q<HTMLInputElement>('mass')?.value || 0);
-      const density = Math.max(1, Number(q<HTMLInputElement>('density')?.value || 1));
+      const density = Math.max(1, Number(q<HTMLInputElement>('density')?.value || 500));
       const price = Number(q<HTMLInputElement>('price')?.value || 0);
       const saving = Math.round((mass / density) * price);
       const day = Number(q<HTMLInputElement>('day')?.value || 0);
@@ -953,23 +1035,108 @@ export const SimulationView: React.FC = () => {
       requestDraw();
     });
 
-    // 3D 드래그 회전 이벤트
+    // 3D 화면 끌기 — 조절점: 크기·높이 / 축사 바닥: 이동 / 빈 곳: 시점 회전
+    const localPoint = (e: PointerEvent): [number, number] => {
+      const r = canvas.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top];
+    };
+
+    const gripNear = (sx: number, sy: number, tolerance: number) =>
+      activePart === 'barn' ? grips.find(g => Math.hypot(g.x - sx, g.y - sy) <= tolerance) : undefined;
+
+    const GRIP_CURSOR: Record<GripKind, string> = {
+      length: 'ew-resize',
+      width: 'ns-resize',
+      corner: 'nwse-resize',
+      height: 'ns-resize',
+    };
+
     const handlePointerDown = (e: PointerEvent) => {
       if (pointer !== null || e.button !== 0) return;
+      const [sx, sy] = localPoint(e);
+      const tolerance = e.pointerType === 'touch' ? 26 : 14;
+      let next: DragMode = { mode: 'view' };
+
+      const grip = gripNear(sx, sy, tolerance);
+      if (grip) {
+        next = { mode: grip.kind, startHeight: current().height, startY: sy };
+      } else {
+        const hit = barnAt(sx, sy);
+        // 다른 축사를 누르면 그 축사로, 축사 탭에서 선택 축사를 누르면 옮기기
+        if (hit && (activePart === 'barn' || hit.id !== selected)) {
+          if (hit.id !== selected || activePart !== 'barn') selectPart('barn', hit.id);
+          const g = toGround(sx, sy);
+          if (g) next = { mode: 'move', offX: g[0] - hit.x, offY: g[1] - hit.y };
+        }
+      }
+
+      drag = next;
+      if (next.mode !== 'view') lockedFit = lastFit;
       pointer = e.pointerId;
       px = e.clientX;
       canvas.setPointerCapture(pointer);
     };
 
     const handlePointerMove = (e: PointerEvent) => {
-      if (e.pointerId !== pointer) return;
-      yaw += (e.clientX - px) * 0.35;
-      px = e.clientX;
+      const [sx, sy] = localPoint(e);
+
+      // 마우스를 올려 두기만 했을 때 — 무엇을 끌 수 있는지 커서로 알려 준다
+      if (pointer === null) {
+        if (e.pointerType !== 'mouse') return;
+        const grip = gripNear(sx, sy, 14);
+        const hit = grip ? null : barnAt(sx, sy);
+        canvas.style.cursor = grip
+          ? GRIP_CURSOR[grip.kind]
+          : hit && (activePart === 'barn' || hit.id !== selected)
+            ? activePart === 'barn' && hit.id === selected
+              ? 'move'
+              : 'pointer'
+            : 'grab';
+        return;
+      }
+      if (e.pointerId !== pointer || !drag) return;
+
+      if (drag.mode === 'view') {
+        yaw += (e.clientX - px) * 0.35;
+        px = e.clientX;
+        requestDraw();
+        return;
+      }
+
+      const b = current();
+      const g = toGround(sx, sy);
+      if (!g) return;
+
+      if (drag.mode === 'move') {
+        b.x = clamp(snap(g[0] - drag.offX), -200, 200);
+        b.y = clamp(snap(g[1] - drag.offY), -200, 200);
+      } else if (drag.mode === 'height') {
+        const f = lockedFit ?? lastFit;
+        const tallest = Math.max(0, ...getSensors(b).map(sen => sen.z));
+        if (f) b.height = clamp(snap(drag.startHeight + (drag.startY - sy) / f.scale), Math.max(2, tallest), 12);
+      } else {
+        const [lx, ly] = toLocal(b, g[0], g[1]);
+        // 통로가 있으면 폭이 통로보다 넓어야 한다
+        const minWidth = b.passage === 'none' ? 3 : Math.max(3, b.alley + 0.5);
+        if (drag.mode !== 'width') b.length = clamp(snap(lx), 5, 150);
+        if (drag.mode !== 'length') b.width = clamp(snap(ly), minWidth, 80);
+      }
+
+      syncBarnInputs();
+      updateSummary();
       requestDraw();
     };
 
     const handlePointerUp = (e: PointerEvent) => {
-      if (e.pointerId === pointer) pointer = null;
+      if (e.pointerId !== pointer) return;
+      pointer = null;
+      const wasEditing = drag && drag.mode !== 'view';
+      drag = null;
+      if (wasEditing) {
+        // 손을 떼면 모든 축사가 보이도록 다시 맞춘다
+        lockedFit = null;
+        requestDraw();
+      }
     };
 
     canvas.addEventListener('pointerdown', handlePointerDown);
@@ -1119,11 +1286,11 @@ export const SimulationView: React.FC = () => {
           <div className="fields">
             <label>
               배치 X (m)
-              <input id="bm-x" type="number" min="-200" max="200" defaultValue="0" />
+              <input id="bm-x" type="number" min="-200" max="200" step="0.5" defaultValue="0" />
             </label>
             <label>
               배치 Y (m)
-              <input id="bm-y" type="number" min="-200" max="200" defaultValue="0" />
+              <input id="bm-y" type="number" min="-200" max="200" step="0.5" defaultValue="0" />
             </label>
             <label>
               동 방향
@@ -1171,7 +1338,7 @@ export const SimulationView: React.FC = () => {
           <canvas id="bm-canvas" role="img" aria-label="선택한 독립 축사의 앞뒤 센서와 가상 악취 분포"></canvas>
         </div>
         <div className="bar">
-          <span className="muted">↔ 화면을 좌우로 드래그해 회전</span>
+          <span className="muted">축사를 끌어 옮기기 · 흰 점으로 크기·높이 · 빈 곳을 좌우로 끌어 시점 회전</span>
           <div>
             <button id="bm-left" type="button" aria-label="시점 왼쪽 회전">
               ↶
@@ -1263,7 +1430,7 @@ export const SimulationView: React.FC = () => {
         <details>
           <summary className="cursor-interaction">톱밥 비용 가정</summary>
           <div className="fields">
-            <label>
+            <label style={{ display: 'none' }}>
               커피박 밀도 (kg/m³)
               <input id="bm-density" type="number" min="1" max="1500" defaultValue="500" />
             </label>
