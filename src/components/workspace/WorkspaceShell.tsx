@@ -216,7 +216,7 @@ function SimulatorPanel({ frameRef }: { frameRef: RefObject<HTMLIFrameElement | 
       <iframe
         ref={frameRef}
         className="workspace-simulator-frame"
-        src="/barn_module_apple_redesign_fixed.html?embedded=1"
+        src={`${import.meta.env.BASE_URL}barn_module_apple_redesign_fixed.html?embedded=1`}
         title="축사 시뮬레이터"
         loading="eager"
       />
