@@ -87,24 +87,6 @@ export const MoreMenu: React.FC<MoreMenuProps> = ({
           <button
             type="button"
             role="menuitem"
-            onClick={() => handleItemClick(() => setActiveTab('assistant'))}
-            className="w-full flex items-center justify-between min-h-[46px] px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 active:scale-[0.99] transition-all text-left group"
-          >
-            <div className="flex items-center gap-3">
-              <span className="w-8 h-8 rounded-lg bg-[#315C36]/10 dark:bg-[#34C759]/15 text-[#315C36] dark:text-[#34C759] flex items-center justify-center">
-                <Bot className="w-4 h-4" />
-              </span>
-              <div>
-                <span className="text-sm font-semibold block">지소행 AI 어시스턴트</span>
-                <span className="text-[11px] text-[#8E8E93] block">자원순환 임팩트 리포터 & 가이드</span>
-              </div>
-            </div>
-            <ChevronRight className="w-4 h-4 text-[#8E8E93] group-hover:text-[#1D1D1F] dark:group-hover:text-white transition-colors" />
-          </button>
-
-          <button
-            type="button"
-            role="menuitem"
             onClick={() => handleItemClick(() => setActiveTab('impact'))}
             className="w-full flex items-center justify-between min-h-[46px] px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 active:scale-[0.99] transition-all text-left group"
           >
@@ -115,6 +97,24 @@ export const MoreMenu: React.FC<MoreMenuProps> = ({
               <div>
                 <span className="text-sm font-semibold block">수거 & 임팩트 대시보드</span>
                 <span className="text-[11px] text-[#8E8E93] block">월별 매장 수거량 및 통계 분석</span>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-[#8E8E93] group-hover:text-[#1D1D1F] dark:group-hover:text-white transition-colors" />
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => handleItemClick(() => setActiveTab('assistant'))}
+            className="w-full flex items-center justify-between min-h-[46px] px-3 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 active:scale-[0.99] transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <span className="w-8 h-8 rounded-lg bg-[#315C36]/10 dark:bg-[#34C759]/15 text-[#315C36] dark:text-[#34C759] flex items-center justify-center">
+                <Bot className="w-4 h-4" />
+              </span>
+              <div>
+                <span className="text-sm font-semibold block">지소행 AI 어시스턴트</span>
+                <span className="text-[11px] text-[#8E8E93] block">자원순환 임팩트 리포터 & 가이드</span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-[#8E8E93] group-hover:text-[#1D1D1F] dark:group-hover:text-white transition-colors" />
