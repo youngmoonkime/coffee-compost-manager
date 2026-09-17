@@ -1337,12 +1337,6 @@ export const SimulationView: React.FC = () => {
           </div>
         </div>
       </section>
-
-      {/* 축사 설정 JSON 코드 */}
-      <details className="panel">
-        <summary className="cursor-interaction">현재 축사 설정 코드 보기</summary>
-        <pre id="bm-code"></pre>
-      </details>
     </div>
   );
 };
