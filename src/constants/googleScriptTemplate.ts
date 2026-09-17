@@ -89,7 +89,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * 앱이 계산한 숫자를 받아 Gemini 로 문장만 만들어 돌려줍니다. 숫자는 만들지 않습니다.
  * 쓰기 전에 [프로젝트 설정 > 스크립트 속성]에 GEMINI_API_KEY 를 넣어야 합니다.
  *   - GEMINI_API_KEY : Google AI Studio 에서 받은 키 (필수)
- *   - AI_MODEL       : 기본 gemini-2.5-flash (선택). 모델이 없어지면 쓸 수 있는 최신 Flash 를 찾아 AI_MODEL_RESOLVED 에 저장합니다
+ *   - AI_MODEL       : 기본 gemini-3.8-flash (선택). 모델이 없어지면 쓸 수 있는 최신 Flash 를 찾아 AI_MODEL_RESOLVED 에 저장합니다
  *   - AI_DAILY_LIMIT : 하루 호출 상한, 기본 20 (선택)
  *   - AI_TOKEN       : 정해 두면 이 값을 함께 보낸 요청만 받습니다 (선택)
  * 이 시트를 건드리지 않으므로 기록 저장과 부딪히지 않습니다.
@@ -163,7 +163,7 @@ var V9_KEY_INDEX = 16;
 var V6_KEY_INDEX = 12;
 // AI 문장 만들기 설정 — 실제 값은 [프로젝트 설정 > 스크립트 속성]에 둔다
 var AI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/";
-var AI_MODEL_DEFAULT = "gemini-2.5-flash";
+var AI_MODEL_DEFAULT = "gemini-3.8-flash";
 var AI_DAILY_LIMIT_DEFAULT = 20;
 var AI_MAX_FACTS_CHARS = 20000;
 // 설명 카드는 코드가 추린 facts 만 받는다

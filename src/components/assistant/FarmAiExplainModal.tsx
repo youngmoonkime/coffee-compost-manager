@@ -234,7 +234,7 @@ export const FarmAiExplainModal: React.FC<FarmAiExplainModalProps> = ({
                     AI 현장 진단 소견
                   </span>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
-                    {aiModel ?? 'Gemini Flash'}
+                    {aiModel ?? 'Gemini 3.8 Flash'}
                   </span>
                 </div>
 
