@@ -1,19 +1,19 @@
 import React, { useState } from 'react';
 import {
   ArrowLeft,
-  Printer,
-  RefreshCw,
   Sparkles,
   CheckCircle2,
-  AlertTriangle,
   ChevronDown,
   ChevronUp,
   Award,
+  Share2,
 } from 'lucide-react';
 import type { ReportAudience, ReportSections, StandardAiSections } from '../../services/aiReport';
 import { generateFallbackAiSections } from '../../services/aiReport';
 import type { ImpactFacts, StandardReportFacts, FarmReportData } from '../../services/reportData';
 import { buildStandardReportFacts } from '../../services/reportData';
+import { ExportReportModal } from './ExportReportModal';
+import { impactForExport } from '../../services/reportExport';
 
 export interface SavedReport {
   id: string;
@@ -29,22 +29,19 @@ export interface SavedReport {
 
 interface Props {
   report: SavedReport;
+  webhookUrl?: string;
   onBack: () => void;
-  onRegenerate: () => void;
-  regenerating: boolean;
   reused?: boolean;
-  regenerateError?: string | null;
 }
 
 export const ImpactReportView: React.FC<Props> = ({
   report,
+  webhookUrl = '',
   onBack,
-  onRegenerate,
-  regenerating,
   reused = false,
-  regenerateError = null,
 }) => {
   const [showAllStores, setShowAllStores] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
 
   // 표준 Facts 확보 (코드에서 100% 계산된 불변 지표)
   const facts: StandardReportFacts =
@@ -74,33 +71,30 @@ export const ImpactReportView: React.FC<Props> = ({
           <span>요청 화면으로 돌아가기</span>
         </button>
 
-        <div className="std-report-actionbar__right">
+        <div className="std-report-actionbar__right flex items-center gap-2">
           <button
             type="button"
-            className="std-report-btn std-report-btn--primary"
-            onClick={onRegenerate}
-            disabled={regenerating}
+            className="std-report-btn std-report-btn--export bg-[#2D6A4F] hover:bg-[#1B4332] text-white font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-lg shadow-sm transition-all cursor-pointer"
+            onClick={() => setIsExportOpen(true)}
           >
-            <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} />
-            <span>{regenerating ? 'AI가 문장 작성 중...' : 'AI 문장 다시 쓰기 ✦'}</span>
-          </button>
-          <button
-            type="button"
-            className="std-report-btn std-report-btn--print"
-            onClick={() => window.print()}
-          >
-            <Printer className="w-4 h-4" />
-            <span>인쇄 · PDF 저장</span>
+            <Share2 className="w-4 h-4" />
+            <span>내보내기 📤</span>
           </button>
         </div>
       </div>
 
-      {regenerateError && (
-        <div className="std-report-alert std-report-alert--warning" role="alert">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>{regenerateError} (코드 연산 수치 및 기본 표준 해설 문장으로 정상 표시됩니다.)</span>
-        </div>
-      )}
+      {/* 내보내기 모달 */}
+      <ExportReportModal
+        isOpen={isExportOpen}
+        onClose={() => setIsExportOpen(false)}
+        title={facts.title}
+        subtitle={facts.subtitle}
+        audience="official"
+        facts={facts}
+        standardSections={aiSections}
+        impact={impactForExport(facts.collection.totalKg, report.facts.savings?.sawdustCostKrw ?? null)}
+        webhookUrl={webhookUrl}
+      />
 
       {/* ════════════════════════════════════════════════════════════
           01 표지 (Cover Page)
@@ -868,26 +862,6 @@ export const ImpactReportView: React.FC<Props> = ({
         </div>
       </section>
 
-      {/* ── 하단 액션 버튼 (인쇄 시 숨김) ── */}
-      <div className="std-report-footer-actions">
-        <button
-          type="button"
-          className="std-report-btn std-report-btn--secondary"
-          onClick={onRegenerate}
-          disabled={regenerating}
-        >
-          <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} />
-          <span>{regenerating ? 'AI가 다시 쓰는 중...' : '해석 문장 다시 다듬기 ✦'}</span>
-        </button>
-        <button
-          type="button"
-          className="std-report-btn std-report-btn--primary"
-          onClick={() => window.print()}
-        >
-          <Printer className="w-4 h-4" />
-          <span>인쇄 · PDF 보고서 저장</span>
-        </button>
-      </div>
     </div>
   );
 };

@@ -155,7 +155,7 @@ export async function fetchAiUsage(webhookUrl: string): Promise<AiUsageStatus> {
     const response = await fetch(url.toString(), { method: 'GET', cache: 'no-store', redirect: 'follow' });
     const body = (await response.json()) as Record<string, unknown>;
     if (body.status !== 'success' || typeof body.dailyLimit !== 'number') {
-      return { success: false, message: 'AI 사용량을 확인하려면 Apps Script 를 최신본(v21)으로 재배포해주세요.' };
+      return { success: false, message: 'AI 사용량을 확인하려면 Apps Script 를 최신본(v23)으로 재배포해주세요.' };
     }
     return {
       success: true,

@@ -71,6 +71,12 @@ export const SettingsView: React.FC = () => {
     for (const [ranch, won] of Object.entries(settings.sawdustPriceByRanch ?? {})) out[ranch] = String(won);
     return out;
   });
+  /** 목장별 월 톱밥 소요량(톤) — 빈 칸이면 톱밥 절감액을 셈하지 않는다 */
+  const [monthlyTons, setMonthlyTons] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const [ranch, tons] of Object.entries(settings.sawdustMonthlyTonsByRanch ?? {})) out[ranch] = String(tons);
+    return out;
+  });
   /** 목장별 깔개 목표량 — 빈 칸이면 "아직 정하지 않음" */
   const [targets, setTargets] = useState<Record<string, string>>(() => {
     const out: Record<string, string> = {};
@@ -103,6 +109,12 @@ export const SettingsView: React.FC = () => {
       if (Number.isFinite(won) && won > 0) sawdustPriceByRanch[ranch] = Math.round(won);
     }
 
+    const sawdustMonthlyTonsByRanch: Record<string, number> = {};
+    for (const [ranch, raw] of Object.entries(monthlyTons)) {
+      const tons = Number(raw);
+      if (Number.isFinite(tons) && tons > 0) sawdustMonthlyTonsByRanch[ranch] = Math.round(tons * 10) / 10;
+    }
+
     updateSettings({
       usableMoistureMin: usableMin,
       usableMoistureMax: usableMax,
@@ -112,6 +124,7 @@ export const SettingsView: React.FC = () => {
       beddingTargetKg,
       sawdustPricePerTon: sawdustPrice,
       sawdustPriceByRanch,
+      sawdustMonthlyTonsByRanch,
     });
     showToast('설정이 성공적으로 저장되었습니다', undefined, 'success');
   };
@@ -128,8 +141,9 @@ export const SettingsView: React.FC = () => {
       beddingTargetKg: settings.beddingTargetKg,
       sawdustPricePerTon: settings.sawdustPricePerTon,
       sawdustPriceByRanch: settings.sawdustPriceByRanch,
+      sawdustMonthlyTonsByRanch: settings.sawdustMonthlyTonsByRanch,
     });
-    showToast('기본 설정값으로 복원되었습니다', '목장별 깔개 목표량과 톱밥 단가는 그대로 두었습니다', 'info');
+    showToast('기본 설정값으로 복원되었습니다', '목장별 깔개 목표량·톱밥 단가·톱밥 소요량은 그대로 두었습니다', 'info');
   };
 
   const handleResetAllData = async () => {
@@ -369,7 +383,7 @@ export const SettingsView: React.FC = () => {
                 </span>
                 <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">기본 톱밥 단가</span>
                 <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">
-                  목장 단가를 넣지 않은 목장에 씁니다 · 리포트 절감액 = 톤 × 단가
+                  목장 단가를 넣지 않은 목장에 씁니다
                 </span>
               </div>
               <div className="flex items-center gap-1">
@@ -460,6 +474,29 @@ export const SettingsView: React.FC = () => {
                     className="w-24 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
                   />
                   <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">원/톤</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-3.5 sm:p-4">
+                <div>
+                  <span className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] block">월 톱밥 소요량</span>
+                  <span className="text-xs text-[#6E6E73] dark:text-[#8E8E93]">
+                    한 달 톱밥 사용량 · 톱밥 절감액 계산에 씁니다
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step={0.5}
+                    placeholder="미설정"
+                    value={monthlyTons[currentRanch] ?? ''}
+                    aria-label={`${currentRanch} 월 톱밥 소요량 (톤)`}
+                    onChange={e => setMonthlyTons(prev => ({ ...prev, [currentRanch]: e.target.value }))}
+                    className="w-24 h-9 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2 text-center text-sm font-bold font-display-metric text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none"
+                  />
+                  <span className="text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">톤/월</span>
                 </div>
               </div>
             </Card>

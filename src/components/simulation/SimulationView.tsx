@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { sawdustSavingFromAmounts } from '../../utils/sawdustSaving';
 import { useCompost } from '../../contexts/CompostContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import './barnSimulation.css';
@@ -26,12 +27,13 @@ const SIMULATION_EVIDENCES: Record<string, SimulationEvidence> = {
   saving: {
     title: '예상 톱밥 구매 절감',
     badge: '축산농가 깔개 수급 실무 기준',
-    source: '전국 축산농협 톱밥 공급 단가 및 축산농가 깔개 표준 투입량 기준',
-    summary: '축사에 투입된 커피박의 부피만큼 기존 톱밥 구매를 1:1 대체한다고 가정한 경제성 산출 공식입니다.',
+    source: '앱 설정의 톱밥 단가(원/톤)와 목장 월 톱밥 소요량 · 커피박 혼합 시 톱밥 구매 50% 절감 가정',
+    summary: '커피박을 깔개로 섞어 쓰면 톱밥 구매가 50% 줄어든다고 보고, 줄어드는 톱밥 양에 톤 단가를 곱한 추정입니다.',
     details: [
-      '산출 공식: (커피박 투입량 kg ÷ 기준 밀도 500kg/m³) × 톱밥 m³당 단가',
-      '커피박의 흡수력과 부피 계수가 관행 톱밥과 유사하여 1:1 부피 대체를 기본 전제로 산출합니다.',
-      '운송비 및 현장 가공비는 제외된 순수 원자재 구매 절감 추정치이며, 농가의 실제 계약 단가에 따라 맞춤 설정됩니다.',
+      '산출 공식: min(월 톱밥 소요량 × 50%, 커피박 사용량) × 톱밥 톤당 단가',
+      '커피박이 모자라면 사용한 커피박만큼만, 넘치면 소요량의 50%까지만 절감으로 인정합니다.',
+      '월 톱밥 소요량은 축종·두수·계절에 따라 크게 달라집니다 (예: 한우 100두 월 15~20톤). 실제 구입량을 넣어 주세요.',
+      '기본값은 설정 > 목장 설정의 기본 톱밥 단가와 목장별 월 소요량에서 가져옵니다. 운송·처리비는 빼지 않았습니다.',
     ],
   },
   cycle: {
@@ -81,7 +83,7 @@ const SIMULATION_EVIDENCES: Record<string, SimulationEvidence> = {
     summary: '커피박 자원순환을 통한 축사 환경 개선 효과를 과학적 연구 데이터와 경제성 지표로 검증한 시뮬레이션입니다.',
     details: [
       '복합악취 저감: 커피박 다공성 탄소 구조의 물리화학적 악취 가스 흡착 실증치 반영',
-      '톱밥 비용 절감: 동일 부피 1:1 대체 원리에 기초한 경제적 이익 추정',
+      '톱밥 비용 절감: 월 톱밥 소요량의 50% 한도에서 커피박 사용량만큼 줄어드는 톱밥 구매비 추정',
       '공간 악취 분포: 실측 센서 2점 기반의 IDW 보간 알고리즘 시각화',
       '본 시뮬레이션은 농가의 실제 적용 시 참고할 수 있는 예측 지표를 제공합니다.',
     ],
@@ -117,13 +119,17 @@ interface BarnData {
   mix: number;
   day: number;
   mass: number;
-  density: number;
+  /** 월 톱밥 소요량(톤). 0 이면 아직 넣지 않은 것 */
+  demand: number;
+  /** 톱밥 단가(원/톤) */
   price: number;
   sensors?: BarnSensor[];
 }
 
 export const SimulationView: React.FC = () => {
-  const { setActiveTab } = useCompost();
+  const { setActiveTab, settings } = useCompost();
+  /** 시뮬레이터가 처음 뜰 때 설정의 톱밥 단가·소요량을 기본값으로 쓴다 */
+  const settingsRef = useRef(settings);
   const { theme, toggleTheme } = useTheme();
   const [selectedInfoKey, setSelectedInfoKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -136,6 +142,7 @@ export const SimulationView: React.FC = () => {
 
   useEffect(() => {
     handlersRef.current = { setActiveTab, toggleTheme, setSelectedInfoKey };
+    settingsRef.current = settings;
   });
 
   useEffect(() => {
@@ -193,8 +200,9 @@ export const SimulationView: React.FC = () => {
       mix: 50,
       day: 0,
       mass: 500,
-      density: 500,
-      price: 120000,
+      // 목장별 월 소요량이 하나라도 있으면 그 값, 없으면 0(미입력)
+      demand: Object.values(settingsRef.current.sawdustMonthlyTonsByRanch ?? {}).find(v => v > 0) ?? 0,
+      price: settingsRef.current.sawdustPricePerTon,
     };
 
     let barns: BarnData[] = [{ ...defaults, id: 1 }];
@@ -258,7 +266,7 @@ export const SimulationView: React.FC = () => {
       a: ['a', 'ax', 'ay', 'z'],
       b: ['b', 'bx', 'by'],
       passage: ['passage', 'alley'],
-      bedding: ['mix', 'day', 'mass', 'density', 'price'],
+      bedding: ['mix', 'day', 'mass', 'demand', 'price'],
     };
 
     const titles: Record<string, string> = {
@@ -501,7 +509,7 @@ export const SimulationView: React.FC = () => {
       'mix',
       'day',
       'mass',
-      'density',
+      'demand',
       'price',
     ];
 
@@ -916,7 +924,11 @@ export const SimulationView: React.FC = () => {
 
       const savingEl = q('saving');
       if (savingEl) {
-        savingEl.textContent = '예상 톱밥 구매 절감 ' + Math.round((b.mass / b.density) * b.price).toLocaleString('ko-KR') + '원 · 선택 동 ' + b.mass.toLocaleString() + 'kg 사용 가정';
+        const saved = sawdustSavingFromAmounts({ monthlyTons: b.demand, coffeeKg: b.mass, pricePerTon: b.price });
+        savingEl.textContent = saved
+          ? '예상 톱밥 구매 절감 ' + saved.savingKrw.toLocaleString('ko-KR') + '원 · 줄어든 톱밥 ' +
+            saved.savedTons.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) + '톤 (선택 동 커피박 ' + b.mass.toLocaleString() + 'kg)'
+          : '톱밥 절감은 월 톱밥 소요량을 넣으면 계산합니다';
       }
 
       const codeEl = q('code');
@@ -938,7 +950,7 @@ export const SimulationView: React.FC = () => {
                 height: sen.z,
                 exampleValue: sen.value,
               })),
-              scenario: { day: t.day, mix: t.mix, mass: t.mass, density: t.density, price: t.price },
+              scenario: { day: t.day, mix: t.mix, mass: t.mass, sawdustMonthlyTons: t.demand, sawdustPricePerTon: t.price },
             })),
           },
           null,
@@ -1008,9 +1020,9 @@ export const SimulationView: React.FC = () => {
       const factor = calcFactor();
       const change = (factor - 1) * 100;
       const mass = Number(q<HTMLInputElement>('mass')?.value || 0);
-      const density = Math.max(1, Number(q<HTMLInputElement>('density')?.value || 500));
+      const demand = Number(q<HTMLInputElement>('demand')?.value || 0);
       const price = Number(q<HTMLInputElement>('price')?.value || 0);
-      const saving = Math.round((mass / density) * price);
+      const saved = sawdustSavingFromAmounts({ monthlyTons: demand, coffeeKg: mass, pricePerTon: price });
       const day = Number(q<HTMLInputElement>('day')?.value || 0);
       const mix = Number(q<HTMLSelectElement>('mix')?.value || 50);
       const length = Number(q<HTMLInputElement>('length')?.value || 0);
@@ -1027,7 +1039,13 @@ export const SimulationView: React.FC = () => {
         odorNoteEl.textContent = change <= 0 ? '초기값 대비 예상 감소' : '초기값 대비 예상 증가';
       }
       const savingValEl = root!.querySelector<HTMLElement>('#apple-saving');
-      if (savingValEl) savingValEl.textContent = saving.toLocaleString('ko-KR') + '원';
+      if (savingValEl) savingValEl.textContent = saved ? saved.savingKrw.toLocaleString('ko-KR') + '원' : '소요량 입력 필요';
+      const savingNoteEl = root!.querySelector<HTMLElement>('#apple-saving-note');
+      if (savingNoteEl) {
+        savingNoteEl.textContent = saved
+          ? `줄어든 톱밥 ${saved.savedTons.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}톤 · ${saved.limitedBy === 'coffee' ? '커피박 사용량 한도' : '소요량 50% 한도'}`
+          : '톱밥 비용 가정에서 월 소요량 입력';
+      }
       const dayValEl = root!.querySelector<HTMLElement>('#apple-day');
       if (dayValEl) dayValEl.textContent = day + '일';
       const mixNoteEl = root!.querySelector<HTMLElement>('#apple-mix-note');
@@ -1530,16 +1548,16 @@ export const SimulationView: React.FC = () => {
         <details>
           <summary className="cursor-interaction">톱밥 비용 가정</summary>
           <div className="fields">
-            <label style={{ display: 'none' }}>
-              커피박 밀도 (kg/m³)
-              <input id="bm-density" type="number" min="1" max="1500" defaultValue="500" />
+            <label>
+              월 톱밥 소요량 (톤)
+              <input id="bm-demand" type="number" min="0" max="10000" step="0.5" defaultValue="0" />
             </label>
             <label>
-              톱밥 단가 (원/m³)
-              <input id="bm-price" type="number" min="0" max="1000000" defaultValue="120000" />
+              톱밥 단가 (원/톤)
+              <input id="bm-price" type="number" min="0" max="10000000" step="1000" defaultValue="120000" />
             </label>
           </div>
-          <p className="muted">동일 부피의 톱밥 대체 가정 · 운송·처리비 차감 전 · 실제 구매 절감 보장 아님</p>
+          <p className="muted">절감 = min(월 소요량 × 50%, 커피박 사용량) × 톤 단가 · 운송·처리비 차감 전 · 실제 구매 절감 보장 아님</p>
         </details>
       </div>
 
@@ -1597,7 +1615,9 @@ export const SimulationView: React.FC = () => {
             <div className="result-value" id="apple-saving">
               —
             </div>
-            <div className="result-note">동일 부피 대체 가정</div>
+            <div className="result-note" id="apple-saving-note">
+              톱밥 구매 50% 절감 가정
+            </div>
           </article>
           <article className="result-card">
             <div className="result-label flex items-center justify-between">

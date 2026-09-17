@@ -4,11 +4,18 @@ import { readEnvUrl } from '../utils/env';
 /**
  * 설정의 판. 기준값의 "뜻"이 바뀌면 올린다.
  * 2: 깔개 사용 함수율이 현장 관찰값(20~30%)으로 바뀐 판.
+ * 3: 기본 톱밥 단가가 120,000원/톤으로 바뀐 판.
  */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
-/** 톱밥 단가 기본값(원/톤) — 사람이 설정에서 바꾸기 전까지 쓰는 임시 가정 */
-export const DEFAULT_SAWDUST_PRICE_PER_TON = 240_000;
+/** 기본 톱밥 단가(원/톤) — 목장별 단가를 넣지 않은 목장에 쓴다 */
+export const DEFAULT_SAWDUST_PRICE_PER_TON = 120_000;
+
+/** 예전 기본 단가 — 사람이 바꾸지 않은 채 저장돼 있으면 새 기본값으로 옮긴다 */
+export const LEGACY_DEFAULT_SAWDUST_PRICE_PER_TON = 240_000;
+
+/** 커피박을 깔개로 쓰면 톱밥 구매 지출이 줄어드는 비율 (50%) */
+export const SAWDUST_SAVING_RATE = 0.5;
 
 export const DEFAULT_SETTINGS: CompostSettings = {
   // 건준목장 현장 관찰: 부숙·건조가 정상이면 3~4주 뒤 20~30% 로 내려간다.
@@ -20,10 +27,11 @@ export const DEFAULT_SETTINGS: CompostSettings = {
   coreProbeDepthCm: 15,
   // 목표량은 목장마다 사람이 정한다 — 앱이 임의로 정하지 않는다
   beddingTargetKg: {},
-  // 임시 가정: 예전 기준(톱밥 120,000원/m³, 커피박 500kg/m³)을 톤으로 옮긴 값. 실제 구매 단가로 바꿔 쓴다.
   sawdustPricePerTon: DEFAULT_SAWDUST_PRICE_PER_TON,
   // 목장별 단가는 사람이 정한다 — 없으면 기본 단가를 쓴다
   sawdustPriceByRanch: {},
+  // 목장별 월 톱밥 소요량(톤)은 사람이 정한다 — 축종·두수·계절에 따라 크게 다르다
+  sawdustMonthlyTonsByRanch: {},
   settingsVersion: SETTINGS_VERSION,
 };
 
@@ -32,7 +40,7 @@ export const DEFAULT_RANCH_NAME = '건준목장';
 
 /** 환경변수가 없을 때 쓰는 부숙관리 주소 (지금까지 쓰던 배포본) */
 const COMPOST_GAS_FALLBACK =
-  'https://script.google.com/macros/s/AKfycbwPJaUeGTnKfD4RBfi5Nq3080UKq8m2ubYWWybl1bj_RxAaKxktnXuUZR1Y710m45cE/exec';
+  'https://script.google.com/macros/s/AKfycbzoY_1P7sDrYz6Gx4cicZWB2ZdUPOmzDoYbBJ32LRL37sUv_GDfJG9T1FbepseZSDZB/exec';
 
 /**
  * 부숙관리 구글 시트("커피박 부숙 관리 대장")의 Apps Script 웹 앱 주소.

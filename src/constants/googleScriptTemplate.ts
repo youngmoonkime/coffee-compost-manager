@@ -4,7 +4,7 @@
 
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
- * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v21)
+ * 커피박 부숙 관리 시스템 - 구글 스프레드시트 연동 Web App (v23)
  * =========================================================================
  * [간편 설정 방법]
  * 1. 구글 스프레드시트 새 문서(sheets.new)를 만듭니다. (기존 시트를 계속 써도 됩니다)
@@ -20,6 +20,13 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  *        다음 사용자로 실행: [나]  /  액세스 권한이 있는 사용자: [모든 사용자]  ★필수★
  *    - 이미 배포했다면: [배포] > [배포 관리] > 연필(수정) > 버전 [새 버전] > [배포]
  *      (이렇게 해야 웹 앱 URL 이 바뀌지 않습니다)
+ *
+ * [v23 변경점] 구글 문서(Docs) 및 구글 슬라이드(Slides) 원클릭 자동 생성 내보내기
+ * - [내보내기 📤] 버튼을 누르면 지소행 에코 그린 템플릿 디자인이 적용된 구글 슬라이드(16:9 발표자료) 및 구글 문서(A4 보고서)를 즉시 만들어 드라이브 URL을 반환합니다.
+ * - 대외 보고용(수거 실적)과 목장 내부용(현장 부숙 관리) 리포트를 완벽히 구분하여 정돈된 표/카드/체크리스트 형식으로 생성합니다.
+ *
+ * [v22 변경점] 악취 측정 기록
+ * - "악취측정" 탭에 목장별 악취 측정(사용 전·후)을 저장·삭제하고, 수거 & 임팩트 화면에서 불러옵니다. (회사 관리자만)
  *
  * [v21 변경점] 보안 · 목장 보고서 AI 설명
  * - 연결 테스트(isTest) 요청은 "연결됨"만 돌려주고 다른 일은 하지 않습니다 (접속 코드 없이 AI 를 부를 수 없게).
@@ -113,7 +120,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  */
 
 // 앱이 이 값을 보고 스크립트가 최신인지 판단한다. 코드를 고치면 반드시 올릴 것.
-var SCRIPT_VERSION = 21;
+var SCRIPT_VERSION = 23;
 
 var SHEET_PREFIX = "주간기록_";
 var LEGACY_SHEET = "커피박_주간기록";
@@ -170,6 +177,14 @@ var DEFAULT_ROW_HEIGHT = 21;
 
 // 입력 검사 — 웹 앱은 주소만 알면 누구나 호출할 수 있으므로 들어온 값을 그대로 믿지 않는다
 var FILE_ID_RE = /^[A-Za-z0-9_-]{10,200}$/;
+var DATE_RE = /^\\d{4}-\\d{2}-\\d{2}$/;
+
+// 악취 측정 기록 탭 — 목장 기록 탭(주간기록_)과 따로 둔다
+var ODOR_SHEET = "악취측정";
+var ODOR_HEADERS = ["측정일", "목장", "측정 장소", "측정 항목", "단위", "사용 전", "사용 후", "저감률(%)", "깔짚 조건", "측정 방법·장비", "비고", "기록 키", "입력 시각"];
+var ODOR_GASES = { NH3: { label: "암모니아(NH₃)", unit: "ppm" }, H2S: { label: "황화수소(H₂S)", unit: "ppm" }, OU: { label: "복합악취", unit: "희석배수" } };
+var ODOR_KEY_RE = /^odor-[A-Za-z0-9_-]{6,64}$/;
+var MAX_TEXT = 200;
 var DATETIME_RE = /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$/;
 var MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 var MAX_PHOTO_IDS = 10;
@@ -285,6 +300,12 @@ function doGet(e) {
     }
 
     // 앱이 실행될 때 모든 목장 탭의 기록을 읽어간다. 시트가 원본이고 앱은 화면이다.
+    if (action === "odor_load") {
+      if (access.role !== "admin") return jsonResponse(forbidden("회사 관리자만 볼 수 있습니다."));
+      var odorSheet = ss.getSheetByName(ODOR_SHEET);
+      return jsonResponse({ status: "success", measurements: odorSheet ? readOdorRows(odorSheet) : [] });
+    }
+
     if (action === "load") {
       if (access.role === "none") return jsonResponse(forbidden("접속 코드가 필요합니다. 앱에서 코드를 다시 입력해주세요."));
       // 옮길 예전 탭이 있을 때만 잠금을 잡는다 (평소 불러오기는 기다리지 않게)
@@ -342,15 +363,23 @@ function doPost(e) {
   var denied = checkPostAccess(parsed, access);
   if (denied) return jsonResponse(denied);
 
-  // 리포트 문장 만들기는 시트를 건드리지 않는다 — 잠금을 잡지 않아 기록 저장과 부딪히지 않는다
-  // AI 요청은 예외가 나도 JSON 으로 돌려준다 (앱이 이유를 보여 줄 수 있게)
+  // 리포트 문장 만들기 및 문서/슬라이드 내보내기는 시트를 건드리지 않는다 — 잠금을 잡지 않아 기록 저장과 부딪히지 않는다
+  // 요청은 예외가 나도 JSON 으로 돌려준다 (앱이 이유를 보여 줄 수 있게)
   if (
     parsed.eventType === "standard_ai_report" ||
     parsed.eventType === "ai_report" ||
     parsed.eventType === "ai_explain" ||
-    parsed.eventType === "farm_ai_explanation"
+    parsed.eventType === "farm_ai_explanation" ||
+    parsed.eventType === "export_google_doc" ||
+    parsed.eventType === "export_google_slides"
   ) {
     try {
+      if (parsed.eventType === "export_google_doc") {
+        return jsonResponse(createGoogleDocReport(parsed));
+      }
+      if (parsed.eventType === "export_google_slides") {
+        return jsonResponse(createGoogleSlidesReport(parsed));
+      }
       if (parsed.eventType === "standard_ai_report") {
         return jsonResponse(generateStandardImpactReport(parsed));
       }
@@ -360,8 +389,8 @@ function doPost(e) {
       return jsonResponse(
         parsed.eventType === "ai_report" ? generateImpactReport(parsed) : generateExplanation(parsed)
       );
-    } catch (aiErr) {
-      return jsonResponse({ status: "error", message: "AI 요청을 처리하지 못했습니다: " + aiErr });
+    } catch (handlerErr) {
+      return jsonResponse({ status: "error", message: "요청을 처리하지 못했습니다: " + handlerErr });
     }
   }
 
@@ -453,6 +482,27 @@ function doPost(e) {
       return jsonResponse({ status: "success", message: "시트에 해당 기록이 없어 건너뛰었습니다." });
     }
 
+    // 6. 악취 측정 기록 저장 · 삭제 (회사 관리자만 — 권한 확인은 위에서 끝났다)
+    if (data.eventType === "odor_saved") {
+      var odor = cleanOdor(data.measurement);
+      if (odor.error) return jsonResponse({ status: "error", message: odor.error });
+      var sheetO = getOdorSheet(ss);
+      var rowO = findOdorRow(sheetO, odor.key);
+      var valuesO = [odor.date, odor.ranch, odor.location, ODOR_GASES[odor.gas].label, ODOR_GASES[odor.gas].unit,
+        odor.before, odor.after, odor.reduction, odor.bedding, odor.method, odor.notes, odor.key, fieldNow()];
+      if (rowO) sheetO.getRange(rowO, 1, 1, ODOR_HEADERS.length).setValues([valuesO]);
+      else sheetO.getRange(sheetO.getLastRow() + 1, 1, 1, ODOR_HEADERS.length).setValues([valuesO]);
+      return jsonResponse({ status: "success", message: rowO ? "악취 측정 기록을 고쳤습니다." : "악취 측정 기록을 저장했습니다." });
+    }
+    if (data.eventType === "odor_deleted") {
+      var keyO = String(data.key || "");
+      if (!ODOR_KEY_RE.test(keyO)) return jsonResponse({ status: "error", message: "기록 키가 올바르지 않습니다." });
+      var sheetD = ss.getSheetByName(ODOR_SHEET);
+      var rowD = sheetD ? findOdorRow(sheetD, keyO) : 0;
+      if (rowD) sheetD.deleteRow(rowD);
+      return jsonResponse({ status: "success", message: rowD ? "악취 측정 기록을 지웠습니다." : "지울 기록이 없습니다." });
+    }
+
     // 5. 전체 삭제 — 모든 목장 탭의 데이터 행을 비운다 (헤더는 유지). 사진도 휴지통으로.
     if (data.eventType === "clear_all") {
       var cleared = 0;
@@ -479,6 +529,98 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ───────────── 악취 측정 기록 ───────────── */
+
+function getOdorSheet(ss) {
+  var sheet = ss.getSheetByName(ODOR_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(ODOR_SHEET);
+    var head = sheet.getRange(1, 1, 1, ODOR_HEADERS.length);
+    head.setValues([ODOR_HEADERS]);
+    head.setBackground("#2e4a2b").setFontColor("#ffffff").setFontWeight("bold");
+    sheet.setFrozenRows(1);
+    // 날짜가 자동 변환되지 않도록 글자로 둔다
+    sheet.getRange("A:A").setNumberFormat("@");
+  }
+  return sheet;
+}
+
+function findOdorRow(sheet, key) {
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+  var keys = sheet.getRange(2, 12, last - 1, 1).getValues();
+  for (var i = 0; i < keys.length; i++) {
+    if (String(keys[i][0]) === key) return i + 2;
+  }
+  return 0;
+}
+
+function gasCodeOf(label) {
+  for (var code in ODOR_GASES) {
+    if (ODOR_GASES.hasOwnProperty(code) && ODOR_GASES[code].label === label) return code;
+  }
+  return "";
+}
+
+function readOdorRows(sheet) {
+  var last = sheet.getLastRow();
+  if (last < 2) return [];
+  var rows = sheet.getRange(2, 1, last - 1, ODOR_HEADERS.length).getValues();
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var date = toDateTimeString(r[0]).slice(0, 10);
+    var gas = gasCodeOf(String(r[3]));
+    var before = Number(r[5]);
+    var after = Number(r[6]);
+    if (!DATE_RE.test(date) || !gas || !isFinite(before) || before <= 0 || !isFinite(after) || after < 0) continue;
+    out.push({
+      id: String(r[11] || ""),
+      date: date,
+      ranchName: String(r[1] || ""),
+      location: String(r[2] || ""),
+      gas: gas,
+      before: before,
+      after: after,
+      bedding: String(r[8] || ""),
+      method: String(r[9] || ""),
+      notes: String(r[10] || "")
+    });
+  }
+  return out;
+}
+
+/** 앱이 보낸 측정 기록을 검사한다. 저감률은 여기서 다시 셈한다 (보낸 값을 믿지 않는다) */
+function cleanOdor(m) {
+  if (!m || typeof m !== "object") return { error: "측정 기록이 없습니다." };
+  var date = String(m.date || "");
+  var key = String(m.id || "");
+  var gas = String(m.gas || "");
+  var before = Number(m.before);
+  var after = Number(m.after);
+  if (!DATE_RE.test(date)) return { error: "측정일 형식이 올바르지 않습니다." };
+  if (!ODOR_KEY_RE.test(key)) return { error: "기록 키가 올바르지 않습니다." };
+  if (!ODOR_GASES.hasOwnProperty(gas)) return { error: "측정 항목이 올바르지 않습니다." };
+  if (!isFinite(before) || before <= 0 || before > 1000000) return { error: "사용 전 값을 확인해주세요." };
+  if (!isFinite(after) || after < 0 || after > 1000000) return { error: "사용 후 값을 확인해주세요." };
+  var ranch = String(m.ranchName || "").trim();
+  if (!ranch) return { error: "목장을 골라주세요." };
+  var cut = function (v) { return safeText(String(v === null || v === undefined ? "" : v).slice(0, MAX_TEXT)); };
+  return {
+    key: key,
+    date: date,
+    ranch: cut(ranch),
+    location: cut(m.location),
+    gas: gas,
+    before: before,
+    after: after,
+    reduction: Math.round(((before - after) / before) * 1000) / 10,
+    bedding: cut(m.bedding),
+    method: cut(m.method),
+    notes: cut(m.notes)
+  };
 }
 
 function withLock(fn) {
@@ -947,6 +1089,563 @@ function generateFarmReportExplanation(data) {
     usedToday: prep.quota.used,
     dailyLimit: prep.quota.limit
   };
+}
+
+/* ─────────────────── 구글 문서(Docs) & 구글 슬라이드(Slides) 내보내기 (v23) ─────────────────── */
+
+/**
+ * 구글 문서(Google Docs) 리포트 자동 생성
+ * 지소행 시그니처 에코 그린 스타일이 적용된 A4 규격 공식 문서
+ */
+function createGoogleDocReport(data) {
+  var title = String(data.title || "커피박 자원순환 운영 보고서").trim();
+  var audience = String(data.audience || "official");
+  var doc = DocumentApp.create(title);
+  var body = doc.getBody();
+
+  // A4 여백 설정 (pt 단위: 36pt = 0.5인치)
+  body.setMarginTop(36);
+  body.setMarginBottom(36);
+  body.setMarginLeft(40);
+  body.setMarginRight(40);
+
+  // 상단 헤더 / 브랜드 배지
+  var brandPara = body.appendParagraph("지소행 자원순환 AI 운영 관리 시스템");
+  brandPara.setFontFamily("Malgun Gothic");
+  brandPara.setFontSize(10);
+  brandPara.setForegroundColor("#52B788");
+  brandPara.setBold(true);
+
+  // 문서 제목
+  var titlePara = body.appendParagraph(title);
+  titlePara.setFontFamily("Malgun Gothic");
+  titlePara.setFontSize(22);
+  titlePara.setForegroundColor("#1B4332");
+  titlePara.setBold(true);
+  titlePara.setSpacingAfter(4);
+
+  // 부제목
+  var sub = String(data.subtitle || (audience === "farm" ? "목장 내부용 현장 상태 및 작업 가이드" : "제주도 커피박 수거 실적 및 자원순환 임팩트 현황"));
+  var subPara = body.appendParagraph(sub);
+  subPara.setFontFamily("Malgun Gothic");
+  subPara.setFontSize(12);
+  subPara.setForegroundColor("#4B5563");
+  subPara.setSpacingAfter(14);
+
+  // 개요 메타데이터 테이블 (2열)
+  var metaRows = [];
+  var exportedTime = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd HH:mm");
+  if (audience === "farm" && data.farmData) {
+    var fd = data.farmData;
+    metaRows = [
+      ["보고 목장", String((fd.farm && fd.farm.name) || "건준목장"), "분석 대상 기간", String((fd.period && fd.period.label) || "최근 기록")],
+      ["작성 일시", exportedTime, "보고서 성격", "현장 내부 관리 및 행동 지침"]
+    ];
+  } else {
+    var facts = data.facts || {};
+    var pr = facts.period || {};
+    metaRows = [
+      ["보고 기관", "제주 자원순환 사업단", "분석 대상 기간", String(pr.dateRange || "해당 월")],
+      ["작성 일시", exportedTime, "데이터 출처", "제주도 커피박 수거대장 실측 원본"]
+    ];
+  }
+
+  var metaTable = body.appendTable(metaRows);
+  metaTable.setBorderColor("#E5E7EB");
+  for (var r = 0; r < metaRows.length; r++) {
+    var row = metaTable.getRow(r);
+    for (var c = 0; c < 4; c++) {
+      var cell = row.getCell(c);
+      cell.setPaddingTop(4);
+      cell.setPaddingBottom(4);
+      cell.setPaddingLeft(6);
+      cell.setPaddingRight(6);
+      if (c % 2 === 0) {
+        cell.setBackgroundColor("#F3F4F6");
+        cell.editAsText().setBold(true).setForegroundColor("#374151").setFontSize(10).setFontFamily("Malgun Gothic");
+      } else {
+        cell.setBackgroundColor("#FFFFFF");
+        cell.editAsText().setForegroundColor("#1F2937").setFontSize(10).setFontFamily("Malgun Gothic");
+      }
+    }
+  }
+  body.appendParagraph("").setSpacingAfter(10);
+
+  if (audience === "farm" && data.farmData) {
+    // 목장 내부용 리포트 내용 구성
+    var farm = data.farmData;
+
+    // 섹션 1: 현재 더미 핵심 상태
+    appendDocHeading(body, "1. 현재 부숙 더미 핵심 지표");
+    var kpiRows = [
+      ["현재 더미량", "심부 온도", "심부 함수율", "깔개 사용 판단"],
+      [
+        (farm.pile ? farm.pile.currentKg.toLocaleString() + " kg" : "-"),
+        (farm.condition && farm.condition.temperature != null ? farm.condition.temperature + " ℃" : "기록 없음"),
+        (farm.condition && farm.condition.moisture != null ? farm.condition.moisture + " %" : "기록 없음"),
+        (farm.bedding ? farm.bedding.statusLabel : "-")
+      ]
+    ];
+    appendDocKpiTable(body, kpiRows);
+
+    // 섹션 2: 깔개 판정 및 근거
+    appendDocHeading(body, "2. 깔개 사용 판단 상세");
+    var beddingReason = (farm.bedding && farm.bedding.notice) || "현재 부숙 데이터 관리 중입니다.";
+    appendDocCallout(body, "판정 결과: " + (farm.bedding ? farm.bedding.statusLabel : "-"), beddingReason);
+
+    // 섹션 3: 지금 해야 할 일 TOP 3
+    if (farm.actions && farm.actions.length > 0) {
+      appendDocHeading(body, "3. 지금 해야 할 일 (우선순위 조치)");
+      for (var a = 0; a < farm.actions.length; a++) {
+        var act = farm.actions[a];
+        var itemPara = body.appendParagraph("[" + exportPriorityLabel(act.priority) + "] " + String(act.title || ""));
+        itemPara.setHeading(DocumentApp.ParagraphHeading.HEADING3).setForegroundColor("#1B4332").setFontSize(11);
+        var actBody = body.appendParagraph("근거: " + String(act.reason || "-"));
+        actBody.setFontSize(10).setForegroundColor("#374151").setSpacingAfter(6);
+      }
+    }
+
+    // 섹션 4: 다음 방문 체크리스트
+    if (farm.nextVisitChecklist && farm.nextVisitChecklist.length > 0) {
+      appendDocHeading(body, "4. 다음 방문 현장 점검 체크리스트");
+      for (var ch = 0; ch < farm.nextVisitChecklist.length; ch++) {
+        var chk = farm.nextVisitChecklist[ch];
+        var p = body.appendParagraph("□  [" + (chk.priority === "high" ? "필수" : "권장") + "] " + String(chk.text || ""));
+        p.setFontSize(10).setForegroundColor("#1F2937").setFontFamily("Malgun Gothic");
+      }
+    }
+  } else {
+    // 대외 보고용 (수거 실적 & 임팩트)
+    var stFacts = data.facts || {};
+    var coll = stFacts.collection || {};
+    var aiSec = data.standardSections || {};
+    var impact = data.impact || {};
+
+    // 섹션 1: 월간 핵심 실적 요약
+    appendDocHeading(body, "1. 월간 핵심 실적 지표");
+    var stdKpi = [
+      ["총 수거량", "실수거 매장", "소각 배출 회피 (참고 추정)", "톱밥 구매비 절감 (추정)"],
+      [
+        (coll.totalKg ? coll.totalKg.toLocaleString() + " kg" : "0 kg"),
+        (coll.activeStoreCount ? coll.activeStoreCount + " 개소" : "0 개소"),
+        exportCo2Text(impact.co2AvoidedKg),
+        exportWonText(impact.sawdustSavingKrw)
+      ]
+    ];
+    appendDocKpiTable(body, stdKpi);
+    var impactNote = body.appendParagraph(exportImpactNote());
+    impactNote.setFontSize(9).setForegroundColor("#6B7280").setFontFamily("Malgun Gothic").setSpacingAfter(8);
+
+    // 총평 AI 해설
+    if (aiSec.executiveSummary) {
+      appendDocCallout(body, "월간 총괄 요약", aiSec.executiveSummary);
+    }
+
+    // 섹션 2: 주차별 수거 추이
+    if (stFacts.weekly && stFacts.weekly.length > 0) {
+      appendDocHeading(body, "2. 주차별 수거 실적 현황");
+      var wkTable = [["주차", "기간", "수거량(kg)", "비율(%)"]];
+      for (var w = 0; w < stFacts.weekly.length; w++) {
+        var item = stFacts.weekly[w];
+        wkTable.push([
+          item.weekLabel || (w + 1) + "주차",
+          item.dateRange || "-",
+          (item.totalKg || 0).toLocaleString() + " kg",
+          Number(item.sharePercent || 0).toFixed(1) + "%"
+        ]);
+      }
+      appendDocDataTable(body, wkTable);
+    }
+
+    // 섹션 3: 향후 계획 및 권고사항
+    if (aiSec.nextActions && aiSec.nextActions.length > 0) {
+      appendDocHeading(body, "3. 향후 중점 추진 과제");
+      for (var na = 0; na < aiSec.nextActions.length; na++) {
+        var np = body.appendParagraph("•  " + aiSec.nextActions[na]);
+        np.setFontSize(11).setForegroundColor("#1F2937").setFontFamily("Malgun Gothic");
+      }
+    }
+  }
+
+  doc.saveAndClose();
+  return {
+    status: "success",
+    url: doc.getUrl(),
+    fileId: doc.getId(),
+    title: title
+  };
+}
+
+/**
+ * 구글 슬라이드(Google Slides) 프레젠테이션 자동 생성
+ * 지소행 시그니처 에코 그린(#2D6A4F) & 카드형 16:9 발표자료 테마
+ */
+function createGoogleSlidesReport(data) {
+  var title = String(data.title || "커피박 자원순환 발표 리포트").trim();
+  var audience = String(data.audience || "official");
+  var pres = SlidesApp.create(title);
+  var slides = pres.getSlides();
+
+  // 기본 슬라이드 1장 확보 또는 생성
+  var slide1 = slides.length > 0 ? slides[0] : pres.appendSlide(SlidesApp.PredefinedLayout.BLANK);
+  // 기존 기본 요소들 비우기
+  var pageElements = slide1.getPageElements();
+  for (var i = 0; i < pageElements.length; i++) {
+    pageElements[i].remove();
+  }
+
+  var BRAND_DARK = "#1B4332";
+  var BRAND_GREEN = "#2D6A4F";
+  var BRAND_LIGHT = "#52B788";
+  var BG_CARD = "#F4FBF7";
+  var TEXT_MUTED = "#6B7280";
+
+  // ──────────────────────────────────────────
+  // SLIDE 1: 표지 (Cover Slide)
+  // ──────────────────────────────────────────
+  var topBar = slide1.insertShape(SlidesApp.ShapeType.RECTANGLE, 0, 0, 720, 14);
+  topBar.getFill().setSolidFill(BRAND_GREEN);
+  topBar.getBorder().setTransparent();
+
+  var leftBar = slide1.insertShape(SlidesApp.ShapeType.RECTANGLE, 50, 70, 6, 80);
+  leftBar.getFill().setSolidFill(BRAND_LIGHT);
+  leftBar.getBorder().setTransparent();
+
+  var tagBox = slide1.insertTextBox("지소행 자원순환 AI 운영 관리 시스템", 65, 70, 500, 24);
+  tagBox.getText().getTextStyle().setFontSize(13).setForegroundColor(BRAND_GREEN).setBold(true);
+
+  var titleBox = slide1.insertTextBox(title, 65, 95, 600, 60);
+  titleBox.getText().getTextStyle().setFontSize(26).setForegroundColor(BRAND_DARK).setBold(true);
+
+  var sub = String(data.subtitle || (audience === "farm" ? "목장 현장 부숙 상태 요약 및 우선순위 행동 지침" : "제주도 커피박 수거 실적 및 자원순환 임팩트"));
+  var subBox = slide1.insertTextBox(sub, 65, 160, 600, 30);
+  subBox.getText().getTextStyle().setFontSize(14).setForegroundColor(TEXT_MUTED);
+
+  var metaCard = slide1.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 50, 220, 620, 120);
+  metaCard.getFill().setSolidFill("#F8FAFC");
+  metaCard.getBorder().getLineFill().setSolidFill("#E2E8F0");
+  metaCard.getBorder().setWeight(1);
+
+  var metaText = "";
+  var exportedTime = Utilities.formatDate(new Date(), "Asia/Seoul", "yyyy-MM-dd");
+  if (audience === "farm" && data.farmData) {
+    var fd = data.farmData;
+    metaText = "• 보고 대상: " + ((fd.farm && fd.farm.name) || "건준목장") + "  |  보고 구분: 현장 내부용\\n" +
+               "• 분석 기간: " + ((fd.period && fd.period.label) || "최근 기록") + "\\n" +
+               "• 작성 일시: " + exportedTime + "  |  엔진: 지소행 AI 어시스턴트";
+  } else {
+    var facts = data.facts || {};
+    var pr = facts.period || {};
+    metaText = "• 발행 기관: 제주 자원순환 사업단  |  보고 구분: 대외 보고용\\n" +
+               "• 분석 기간: " + (pr.dateRange || "해당 월") + " (경과 " + (pr.elapsedDays || "-") + "일)\\n" +
+               "• 작성 일시: " + exportedTime + "  |  자료 출처: 제주도 커피박 수거대장 실측 원본";
+  }
+  var metaContent = slide1.insertTextBox(metaText, 70, 235, 580, 90);
+  metaContent.getText().getTextStyle().setFontSize(12).setForegroundColor("#374151");
+
+  // ──────────────────────────────────────────
+  // SLIDE 2: 핵심 지표 KPI 카드 (3 Big Number Cards + AI 총평)
+  // ──────────────────────────────────────────
+  var slide2 = pres.appendSlide(SlidesApp.PredefinedLayout.BLANK);
+  addSlideHeader(slide2, "01. 핵심 운영 성과 지표", "핵심 수치 요약 및 종합 분석", BRAND_GREEN);
+
+  var kpiCards = [];
+  var summaryDesc = "";
+
+  if (audience === "farm" && data.farmData) {
+    var fd2 = data.farmData;
+    kpiCards = [
+      { label: "현재 더미량", value: (fd2.pile ? fd2.pile.currentKg.toLocaleString() + " kg" : "-"), sub: "누적 투입 - 깔개 사용" },
+      { label: "심부 환경", value: (fd2.condition && fd2.condition.temperature != null ? fd2.condition.temperature + "℃" : "기록 없음"), sub: "함수율 " + (fd2.condition && fd2.condition.moisture != null ? fd2.condition.moisture + "%" : "기록 없음") },
+      { label: "깔개 판정", value: (fd2.bedding ? fd2.bedding.statusLabel : "-"), sub: (fd2.management ? "최근 7일 혼합 " + fd2.management.mixingCountLast7Days + "회" : "-") }
+    ];
+    summaryDesc = (fd2.bedding && fd2.bedding.notice) || "현재 현장 부숙 상태 지표가 관리되고 있습니다.";
+  } else {
+    var f2 = data.facts || {};
+    var c2 = f2.collection || {};
+    var sec2 = data.standardSections || {};
+    var imp2 = data.impact || {};
+    kpiCards = [
+      { label: "총 수거량", value: (c2.totalKg ? c2.totalKg.toLocaleString() + " kg" : "0 kg"), sub: "일평균 " + (c2.dailyAverageKg ? c2.dailyAverageKg.toLocaleString() + " kg" : "-") },
+      { label: "참여 매장", value: (c2.activeStoreCount ? c2.activeStoreCount + " 개소" : "0"), sub: "전체 " + (c2.registeredStoreCount || 0) + "개 매장 중" },
+      { label: "소각 배출 회피", value: exportCo2Text(imp2.co2AvoidedKg), sub: "참고 추정 · 커피박 0.338kgCO₂/kg" }
+    ];
+    summaryDesc = sec2.executiveSummary || "월간 커피박 수거 실적이 안정적으로 유지되고 있으며 지속적인 자원화가 추진 중입니다.";
+  }
+
+  for (var k = 0; k < 3; k++) {
+    var cardX = 50 + k * 210;
+    var card = slide2.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, cardX, 95, 200, 115);
+    card.getFill().setSolidFill(BG_CARD);
+    card.getBorder().getLineFill().setSolidFill(BRAND_LIGHT);
+    card.getBorder().setWeight(1.5);
+
+    var lblBox = slide2.insertTextBox(kpiCards[k].label, cardX + 12, 103, 176, 22);
+    lblBox.getText().getTextStyle().setFontSize(11).setForegroundColor(BRAND_GREEN).setBold(true);
+
+    var valBox = slide2.insertTextBox(kpiCards[k].value, cardX + 12, 128, 176, 40);
+    valBox.getText().getTextStyle().setFontSize(22).setForegroundColor(BRAND_DARK).setBold(true);
+
+    var sBox = slide2.insertTextBox(kpiCards[k].sub, cardX + 12, 172, 176, 26);
+    sBox.getText().getTextStyle().setFontSize(11).setForegroundColor(TEXT_MUTED);
+  }
+
+  var summaryBox = slide2.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 50, 230, 620, 130);
+  summaryBox.getFill().setSolidFill("#F8FAFC");
+  summaryBox.getBorder().getLineFill().setSolidFill("#CBD5E1");
+  summaryBox.getBorder().setWeight(1);
+
+  var sumTitle = slide2.insertTextBox("💡 AI 총괄 해설 & 현장 진단", 65, 240, 590, 24);
+  sumTitle.getText().getTextStyle().setFontSize(12).setForegroundColor(BRAND_GREEN).setBold(true);
+
+  var sumBody = slide2.insertTextBox(summaryDesc, 65, 268, 590, 80);
+  sumBody.getText().getTextStyle().setFontSize(12).setForegroundColor("#1F2937");
+
+  // ──────────────────────────────────────────
+  // SLIDE 3: 상세 세부 지표 / 주차별 실적 테이블
+  // ──────────────────────────────────────────
+  var slide3 = pres.appendSlide(SlidesApp.PredefinedLayout.BLANK);
+  addSlideHeader(slide3, "02. 세부 현황 및 상세 분석", "주차별 추이 및 현장 세부 지표", BRAND_GREEN);
+
+  if (audience === "farm" && data.farmData) {
+    var recs = data.farmData.recentRecords || [];
+    var rowCount = Math.min(recs.length, 5) + 1;
+    if (rowCount > 1) {
+      var fTable = slide3.insertTable(rowCount, 5, 50, 100, 620, 240);
+      var fHeaders = ["방문 일시", "작업 유형", "심부온도", "함수율", "혼합·곰팡이"];
+      for (var hc = 0; hc < 5; hc++) {
+        var hcell = fTable.getCell(0, hc);
+        hcell.getText().setText(fHeaders[hc]).getTextStyle().setFontSize(11).setForegroundColor("#FFFFFF").setBold(true);
+        hcell.getFill().setSolidFill(BRAND_GREEN);
+      }
+      for (var fr = 0; fr < rowCount - 1; fr++) {
+        var rItem = recs[fr];
+        var rowData = [
+          String(rItem.date || "-").slice(0, 10),
+          String(rItem.workType || "-"),
+          (rItem.coreTemp != null ? rItem.coreTemp + "℃" : "-"),
+          (rItem.moisture != null ? rItem.moisture + "%" : "-"),
+          String(rItem.mixedLabel || "기록 없음") + " / " + String(rItem.moldLabel || "기록 없음")
+        ];
+        for (var fc = 0; fc < 5; fc++) {
+          var cellF = fTable.getCell(fr + 1, fc);
+          cellF.getText().setText(rowData[fc]).getTextStyle().setFontSize(11).setForegroundColor("#1F2937");
+          if (fr % 2 === 1) cellF.getFill().setSolidFill("#F8FAFC");
+        }
+      }
+    }
+  } else {
+    var wks = (data.facts && data.facts.weekly) || [];
+    var wCount = Math.min(wks.length, 5) + 1;
+    if (wCount > 1) {
+      var sTable = slide3.insertTable(wCount, 4, 50, 100, 620, 240);
+      var sHeaders = ["주차 구분", "대상 기간", "수거량 (kg)", "점유율 (%)"];
+      for (var sc = 0; sc < 4; sc++) {
+        var scell = sTable.getCell(0, sc);
+        scell.getText().setText(sHeaders[sc]).getTextStyle().setFontSize(11).setForegroundColor("#FFFFFF").setBold(true);
+        scell.getFill().setSolidFill(BRAND_GREEN);
+      }
+      for (var sw = 0; sw < wCount - 1; sw++) {
+        var wItem = wks[sw];
+        var wRow = [
+          wItem.weekLabel || (sw + 1) + "주차",
+          wItem.dateRange || "-",
+          (wItem.totalKg || 0).toLocaleString() + " kg",
+          Number(wItem.sharePercent || 0).toFixed(1) + "%"
+        ];
+        for (var cIdx = 0; cIdx < 4; cIdx++) {
+          var sCell = sTable.getCell(sw + 1, cIdx);
+          sCell.getText().setText(wRow[cIdx]).getTextStyle().setFontSize(11).setForegroundColor("#1F2937");
+          if (sw % 2 === 1) sCell.getFill().setSolidFill("#F8FAFC");
+        }
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────
+  // SLIDE 4: 향후 계획 & 현장 체크리스트
+  // ──────────────────────────────────────────
+  var slide4 = pres.appendSlide(SlidesApp.PredefinedLayout.BLANK);
+  addSlideHeader(slide4, "03. 현장 액션 플랜 & 권고사항", "개선 조치 및 다음 단계 실행 계획", BRAND_GREEN);
+
+  var actionList = [];
+  if (audience === "farm" && data.farmData) {
+    var fActions = data.farmData.actions || [];
+    for (var fa = 0; fa < Math.min(fActions.length, 3); fa++) {
+      actionList.push({
+        title: "[" + exportPriorityLabel(fActions[fa].priority) + "] " + String(fActions[fa].title || ""),
+        desc: "근거: " + String(fActions[fa].reason || "-")
+      });
+    }
+    if (actionList.length === 0 && data.farmData.nextVisitChecklist) {
+      var nchk = data.farmData.nextVisitChecklist;
+      for (var nc = 0; nc < Math.min(nchk.length, 3); nc++) {
+        actionList.push({
+          title: "점검: " + String(nchk[nc].text || ""),
+          desc: nchk[nc].priority === "high" ? "다음 방문 때 꼭 확인" : "다음 방문 때 확인 권장"
+        });
+      }
+    }
+  } else {
+    var stdActions = (data.standardSections && data.standardSections.nextActions) || [];
+    var noteBox = slide4.insertTextBox(exportImpactNote(), 50, 360, 620, 30);
+    noteBox.getText().getTextStyle().setFontSize(9).setForegroundColor(TEXT_MUTED);
+    for (var sa = 0; sa < Math.min(stdActions.length, 3); sa++) {
+      actionList.push({
+        title: "중점 추진 과제 0" + (sa + 1),
+        desc: stdActions[sa]
+      });
+    }
+  }
+
+  if (actionList.length === 0) {
+    actionList.push({ title: "정기 모니터링 유지", desc: "기존 수거 체계 및 부숙 상태를 지속 점검합니다." });
+  }
+
+  for (var actIdx = 0; actIdx < actionList.length; actIdx++) {
+    var boxY = 100 + actIdx * 82;
+    var aBox = slide4.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 50, boxY, 620, 70);
+    aBox.getFill().setSolidFill("#FFFFFF");
+    aBox.getBorder().getLineFill().setSolidFill("#E2E8F0");
+    aBox.getBorder().setWeight(1);
+
+    var tagShape = slide4.insertShape(SlidesApp.ShapeType.RECTANGLE, 50, boxY, 6, 70);
+    tagShape.getFill().setSolidFill(BRAND_GREEN);
+    tagShape.getBorder().setTransparent();
+
+    var aTitle = slide4.insertTextBox(actionList[actIdx].title, 70, boxY + 8, 580, 24);
+    aTitle.getText().getTextStyle().setFontSize(13).setForegroundColor(BRAND_DARK).setBold(true);
+
+    var aDesc = slide4.insertTextBox(actionList[actIdx].desc, 70, boxY + 34, 580, 28);
+    aDesc.getText().getTextStyle().setFontSize(11).setForegroundColor("#4B5563");
+  }
+
+  pres.saveAndClose();
+  return {
+    status: "success",
+    url: pres.getUrl(),
+    fileId: pres.getId(),
+    title: title
+  };
+}
+
+/** 할 일 우선순위 → 문서에 찍을 말 */
+function exportPriorityLabel(priority) {
+  return priority === "high" ? "우선" : "권장";
+}
+
+/** 소각 배출 회피 추정치 (kgCO₂) → 글자 */
+function exportCo2Text(kg) {
+  var n = Number(kg);
+  if (!isFinite(n) || n <= 0) return "-";
+  return n >= 1000 ? (Math.round(n / 10) / 100) + " tCO₂" : Math.round(n) + " kgCO₂";
+}
+
+/** 톱밥 절감 추정치 (원) → 글자. 월 톱밥 소요량이 없으면 null 이 온다 */
+function exportWonText(won) {
+  if (won === null || won === undefined || won === "") return "소요량 미입력";
+  var n = Number(won);
+  if (!isFinite(n)) return "-";
+  return n >= 10000 ? (Math.round(n / 1000) / 10) + "만 원" : Math.round(n) + "원";
+}
+
+/** 추정치의 근거 — 공식 감축량으로 읽히지 않게 문서마다 밝힌다 */
+function exportImpactNote() {
+  return "※ 소각 배출 회피 = 수거량 × 0.338kgCO₂/kg (외부 참고 계수, 국가 승인 배출계수·공식 감축 인증 아님). " +
+    "톱밥 절감 = min(목장 월 톱밥 소요량 × 50%, 수거량) × 톱밥 단가 (운송·처리비 미반영 추정).";
+}
+
+/** 슬라이드 헤더 도우미 */
+function addSlideHeader(slide, title, subtitle, brandColor) {
+  var topAccent = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, 0, 0, 720, 8);
+  topAccent.getFill().setSolidFill(brandColor);
+  topAccent.getBorder().setTransparent();
+
+  var tBox = slide.insertTextBox(title, 50, 24, 620, 36);
+  tBox.getText().getTextStyle().setFontSize(18).setForegroundColor("#1B4332").setBold(true);
+
+  var sBox = slide.insertTextBox(subtitle, 50, 58, 620, 24);
+  sBox.getText().getTextStyle().setFontSize(11).setForegroundColor("#6B7280");
+}
+
+/** 문서 헤딩 추가 도우미 */
+function appendDocHeading(body, text) {
+  var h = body.appendParagraph(text);
+  h.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  h.setFontFamily("Malgun Gothic");
+  h.setFontSize(13);
+  h.setForegroundColor("#1B4332");
+  h.setSpacingBefore(12);
+  h.setSpacingAfter(6);
+  return h;
+}
+
+/** 문서 KPI 카드 테이블 도우미 */
+function appendDocKpiTable(body, matrix) {
+  var table = body.appendTable(matrix);
+  table.setBorderColor("#E5E7EB");
+  var colCount = matrix[0].length;
+  for (var r = 0; r < 2; r++) {
+    var row = table.getRow(r);
+    for (var c = 0; c < colCount; c++) {
+      var cell = row.getCell(c);
+      cell.setPaddingTop(6);
+      cell.setPaddingBottom(6);
+      cell.setPaddingLeft(8);
+      cell.setPaddingRight(8);
+      if (r === 0) {
+        cell.setBackgroundColor("#F4FBF7");
+        cell.editAsText().setBold(true).setForegroundColor("#2D6A4F").setFontSize(10).setFontFamily("Malgun Gothic");
+      } else {
+        cell.setBackgroundColor("#FFFFFF");
+        cell.editAsText().setBold(true).setForegroundColor("#111827").setFontSize(14).setFontFamily("Malgun Gothic");
+      }
+    }
+  }
+  body.appendParagraph("").setSpacingAfter(8);
+}
+
+/** 문서 하이라이트 콜아웃 도우미 */
+function appendDocCallout(body, title, content) {
+  var table = body.appendTable([[title + "\\n" + content]]);
+  table.setBorderColor("#2D6A4F");
+  var cell = table.getCell(0, 0);
+  cell.setBackgroundColor("#F4FBF7");
+  cell.setPaddingTop(8);
+  cell.setPaddingBottom(8);
+  cell.setPaddingLeft(12);
+  cell.setPaddingRight(12);
+  var txt = cell.editAsText();
+  txt.setFontFamily("Malgun Gothic");
+  txt.setFontSize(11);
+  txt.setForegroundColor("#1F2937");
+  body.appendParagraph("").setSpacingAfter(8);
+}
+
+/** 문서 데이터 테이블 도우미 */
+function appendDocDataTable(body, matrix) {
+  var table = body.appendTable(matrix);
+  table.setBorderColor("#CBD5E1");
+  var rowCount = matrix.length;
+  var colCount = matrix[0].length;
+  for (var r = 0; r < rowCount; r++) {
+    var row = table.getRow(r);
+    for (var c = 0; c < colCount; c++) {
+      var cell = row.getCell(c);
+      cell.setPaddingTop(5);
+      cell.setPaddingBottom(5);
+      cell.setPaddingLeft(8);
+      cell.setPaddingRight(8);
+      if (r === 0) {
+        cell.setBackgroundColor("#2D6A4F");
+        cell.editAsText().setBold(true).setForegroundColor("#FFFFFF").setFontSize(10).setFontFamily("Malgun Gothic");
+      } else {
+        cell.setBackgroundColor(r % 2 === 1 ? "#FFFFFF" : "#F8FAFC");
+        cell.editAsText().setForegroundColor("#1F2937").setFontSize(10).setFontFamily("Malgun Gothic");
+      }
+    }
+  }
+  body.appendParagraph("").setSpacingAfter(8);
 }
 
 function aiFailure(called, quota) {

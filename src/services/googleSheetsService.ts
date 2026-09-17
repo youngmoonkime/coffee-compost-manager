@@ -6,7 +6,7 @@ import { describeWorkType, getBeddingUsedKg, MOLD_LABELS, parseMoldStatus } from
 import { getDriveViewUrl } from '../utils/photos';
 import { DEFAULT_RANCH_NAME } from '../constants/defaultData';
 
-export const REQUIRED_SCRIPT_VERSION = 21;
+export const REQUIRED_SCRIPT_VERSION = 23;
 
 /* 시트에 사람이 읽을 수 있는 글자로 적는다. 빈 칸은 "기록 없음" 이라는 뜻이다. */
 const MIXED_YES = '완료';

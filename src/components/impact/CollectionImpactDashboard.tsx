@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutList, Table as TableIcon, Search } from 'lucide-react';
 import { gasApi, getCollectionSheetUrl, type CollectionData, type DashboardData } from '../../services/gasClient';
 import { isImplausiblePrevious } from '../../services/reportData';
+import { ResourceImpactSection } from './ResourceImpactSection';
 import '../../styles/collection-impact.css';
 
 const YEARS = [2026, 2025] as const;
@@ -285,6 +286,15 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
             </article>
           </section>
 
+          <ResourceImpactSection
+            collectedKg={dashboard.collection.totalKg}
+            receivingRanch={dashboard.operatingFarm?.name ?? null}
+            year={dashboard.period.year}
+            month={dashboard.period.month}
+            periodLabel={`${dashboard.period.year}년 ${dashboard.period.month}월`}
+            isPartialMonth={dashboard.collection.isPartialMonth}
+          />
+
           <section className="collection-impact__grid">
             <article className="collection-impact__card">
               <div className="collection-impact__card-head">
@@ -472,7 +482,7 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
             </div>
             <p style={{ margin: 0, fontSize: '13px' }}>
               수거량은 {dashboard.period.year}년 수거대장 {dashboard.period.month}월 시트의 주차별 실제 입력값을 기준으로 정밀 집계합니다.
-              탄소 감축량·톱밥 절감액 등 검증되지 않은 환산값은 현재 화면에 표시하지 않습니다.
+              자원순환 임팩트의 탄소·톱밥 값은 이 수거량으로 환산한 추정치이며, 악취 저감은 입력한 현장 측정 기록(없는 달은 2025년 시범사업 기록)입니다.
             </p>
           </footer>
         </>

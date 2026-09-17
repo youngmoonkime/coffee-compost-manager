@@ -840,35 +840,7 @@
   cursor: default;
 }
 
-/* 인쇄하면 리포트만 남는다 (PDF 저장에도 그대로 쓰인다) */
-@media print {
-  body * {
-    visibility: hidden;
-  }
-
-  .ai-report,
-  .ai-report * {
-    visibility: visible;
-  }
-
-  .ai-report {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-  }
-
-  .ai-report__back,
-  .ai-report__buttons {
-    display: none !important;
-  }
-
-  .ai-report__cover {
-    background: #2e4a2b !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-}
+/* 인쇄 스타일은 파일 최하단 통합 @media print 블록 참조 */
 
 .ai-report__warning {
   color: #b3261e !important;
@@ -2030,49 +2002,102 @@
 
 /* ════════════════════════════════════════════════════════════
    인쇄 및 PDF 출력 스타일 (@media print)
+   - 다크모드 강제 해제 및 백색 바탕/선명한 폰트 적용
+   - A4 규격 및 마진 설정
+   - 카드/섹션 단위 페이지 잘림(break-inside) 방지
+   - 네비게이션 및 액션바 완벽 은닉
 ════════════════════════════════════════════════════════════ */
+@page {
+  size: A4 portrait;
+  margin: 12mm 10mm 15mm 10mm;
+}
+
 @media print {
-  body * {
-    visibility: hidden;
+  /* 불필요한 UI 숨김 */
+  header:not(.print-include),
+  nav,
+  aside,
+  footer,
+  .std-report-actionbar,
+  .std-report-footer-actions,
+  .std-report-btn,
+  .print\:hidden,
+  button,
+  [role="dialog"] {
+    display: none !important;
   }
 
+  /* 배경 강제 백색화 및 텍스트 선명화 (다크모드 해제) */
+  html,
+  body,
+  #root,
+  .dark,
+  .dark body,
+  .dark #root {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: auto !important;
+  }
+
+  /* 메인 리포트 컨테이너 너비 100% 확장 및 여백 조정 */
   .std-report-wrapper,
-  .std-report-wrapper * {
-    visibility: visible;
-  }
-
-  .std-report-wrapper {
-    position: absolute;
-    left: 0;
-    top: 0;
+  .farm-report-wrapper,
+  .ai-report {
+    display: block !important;
+    position: static !important;
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
-    color: #0f172a !important;
     background: #ffffff !important;
+    color: #111827 !important;
   }
 
-  .std-report-actionbar,
-  .std-report-footer-actions,
-  .std-report-btn {
-    display: none !important;
-  }
-
-  .std-report-section {
-    page-break-inside: avoid;
-    break-inside: avoid;
+  /* 카드 및 섹션 중간 잘림 방지 */
+  .std-report-section,
+  .std-report-cover,
+  .std-report-table-box,
+  .farm-report-wrapper > section,
+  .farm-report-wrapper > div:not(.print\:hidden),
+  .farm-card,
+  table,
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
     box-shadow: none !important;
-    border: 1px solid #cbd5e1 !important;
-    margin-bottom: 16px !important;
-    background: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    background-color: #ffffff !important;
+    color: #111827 !important;
   }
 
+  /* 다크모드 배경/텍스트를 인쇄용으로 전환 */
+  .dark .bg-\[\#1C1C1E\],
+  .dark .bg-\[\#1C1C1E\]\/80,
+  .dark .bg-\[\#2C2C2E\],
+  .dark .bg-black\/5,
+  .dark .bg-white\/5,
+  .dark .bg-white\/10 {
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+    color: #111827 !important;
+  }
+
+  .dark .text-\[\#F5F5F7\],
+  .dark .text-\[\#8E8E93\],
+  .dark .text-white {
+    color: #1f2937 !important;
+  }
+
+  /* 표지 헤더 강조 */
   .std-report-cover {
-    border-top: 5px solid #15803d !important;
+    border-top: 5px solid #2D6A4F !important;
     background: #f8fafc !important;
+    margin-bottom: 20px !important;
   }
 
+  /* 색상 보존 */
   * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;

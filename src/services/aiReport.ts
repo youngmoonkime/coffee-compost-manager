@@ -44,7 +44,7 @@ export const AI_ERROR_MESSAGES: Record<Exclude<AiErrorCode, 'failed'>, string> =
     'Apps Script 에 외부 서비스 연결 권한이 없습니다. 편집기에서 setupAiAccess 를 한 번 실행해 허용한 뒤 새 버전으로 배포해주세요.',
   rate_limited: 'AI 서버가 혼잡합니다. 잠시 뒤 다시 시도해주세요.',
   daily_limit: '오늘 AI 설명 사용 횟수를 모두 사용했습니다.',
-  outdated_script: 'AI 기능을 쓰려면 Apps Script 를 최신본(v21)으로 재배포해주세요.',
+  outdated_script: 'AI 기능을 쓰려면 Apps Script 를 최신본(v23)으로 재배포해주세요.',
 };
 
 export interface AiUsage {

@@ -10,7 +10,13 @@ import type {
   Pile,
   VerdictInfo,
 } from '../types';
-import { DEFAULT_RANCH_NAME, DEFAULT_SETTINGS, SETTINGS_VERSION, COMPOST_GAS_API_URL } from '../constants/defaultData';
+import {
+  DEFAULT_RANCH_NAME,
+  DEFAULT_SETTINGS,
+  SETTINGS_VERSION,
+  COMPOST_GAS_API_URL,
+  LEGACY_DEFAULT_SAWDUST_PRICE_PER_TON,
+} from '../constants/defaultData';
 import { createCycle, resolveCycle } from '../utils/fieldOps';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../utils/storage';
 import {
@@ -64,6 +70,17 @@ function normalizeTargets(stored: unknown): Record<string, number> {
   return out;
 }
 
+/** 목장별 소수 값(톤 등) — 소수 첫째 자리까지 남긴다 */
+function normalizeAmounts(stored: unknown): Record<string, number> {
+  if (!stored || typeof stored !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [ranch, value] of Object.entries(stored as Record<string, unknown>)) {
+    const n = Number(value);
+    if (ranch.trim() && Number.isFinite(n) && n > 0) out[ranch.trim()] = Math.round(n * 10) / 10;
+  }
+  return out;
+}
+
 /** 저장된 설정에 빠지거나 잘못된 항목은 기본값으로 채운다 */
 function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
   const pick = (
@@ -87,6 +104,12 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
     usableMoistureMax = DEFAULT_SETTINGS.usableMoistureMax;
   }
 
+  // v2 까지의 240,000원/톤은 앱이 넣어 준 기본값이었다. 새 기본 단가(120,000원/톤)로 한 번만 맞춘다.
+  let sawdustPricePerTon = pick('sawdustPricePerTon');
+  if (storedVersion < 3 && sawdustPricePerTon === LEGACY_DEFAULT_SAWDUST_PRICE_PER_TON) {
+    sawdustPricePerTon = DEFAULT_SETTINGS.sawdustPricePerTon;
+  }
+
   return {
     usableMoistureMin,
     usableMoistureMax,
@@ -94,8 +117,9 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
     highTempThreshold: pick('highTempThreshold'),
     coreProbeDepthCm: pick('coreProbeDepthCm'),
     beddingTargetKg: normalizeTargets(stored.beddingTargetKg),
-    sawdustPricePerTon: pick('sawdustPricePerTon'),
+    sawdustPricePerTon,
     sawdustPriceByRanch: normalizeTargets(stored.sawdustPriceByRanch),
+    sawdustMonthlyTonsByRanch: normalizeAmounts(stored.sawdustMonthlyTonsByRanch),
     settingsVersion: SETTINGS_VERSION,
   };
 }
@@ -388,12 +412,15 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setSettings(prev => {
         const hasTarget = ranch in (prev.beddingTargetKg ?? {});
         const hasPrice = ranch in (prev.sawdustPriceByRanch ?? {});
-        if (!hasTarget && !hasPrice) return prev;
+        const hasMonthly = ranch in (prev.sawdustMonthlyTonsByRanch ?? {});
+        if (!hasTarget && !hasPrice && !hasMonthly) return prev;
         const targets = { ...prev.beddingTargetKg };
         const prices = { ...prev.sawdustPriceByRanch };
+        const monthly = { ...prev.sawdustMonthlyTonsByRanch };
         delete targets[ranch];
         delete prices[ranch];
-        return { ...prev, beddingTargetKg: targets, sawdustPriceByRanch: prices };
+        delete monthly[ranch];
+        return { ...prev, beddingTargetKg: targets, sawdustPriceByRanch: prices, sawdustMonthlyTonsByRanch: monthly };
       });
       return true;
     },

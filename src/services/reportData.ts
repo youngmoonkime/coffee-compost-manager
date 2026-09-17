@@ -1,5 +1,6 @@
 import type { CompostSettings, MeasurementRecord, OperatingCycle } from '../types';
-import { DEFAULT_RANCH_NAME, DEFAULT_SAWDUST_PRICE_PER_TON } from '../constants/defaultData';
+import { DEFAULT_RANCH_NAME } from '../constants/defaultData';
+import { computeSawdustSaving } from '../utils/sawdustSaving';
 import { getCurrentDateString, normalizeName, summarizePiles } from '../utils/calculations';
 import { summarizeCycle, getAddedKg, getBeddingUsedKg } from '../utils/fieldOps';
 import { decideBedding } from '../utils/assistantInsights';
@@ -52,11 +53,17 @@ export interface FieldFact {
 
 export interface RanchSaving {
   ranchName: string;
+  /** 실제로 줄어드는 톱밥(톤) = min(월 소요량 × 50%, 들어온 커피박) */
   tons: number;
   pricePerTon: number;
   /** ranch = 목장별로 입력한 단가, default = 기본 단가 */
   priceSource: 'ranch' | 'default';
   costKrw: number;
+  /** 목장의 월 톱밥 소요량(톤) */
+  monthlyTons?: number;
+  /** 들어온 커피박(톤) */
+  coffeeTons?: number;
+  limitedBy?: 'demand' | 'coffee';
 }
 
 export interface PileFact {
@@ -132,13 +139,13 @@ export interface ImpactFacts {
     basisSource: 'collection-gas' | 'compost-gas';
     /** 근거 수거량(톤) */
     basisTons: number;
-    /** 목장별 (톤 × 그 목장 단가) 합계 */
+    /** 목장별 절감액 합계 */
     sawdustCostKrw: number;
     /** 목장별 계산 — 목장마다 톱밥 구매 단가가 다르다 */
     byRanch: RanchSaving[];
     /** 목장 단가가 없는 목장에 쓴 기본 단가 */
     defaultPricePerTon: number;
-    /** 기본 단가가 설정에서 바꾸지 않은 임시 가정값이고, 실제로 그 값을 쓴 목장이 있는지 */
+    /** 목장 단가 대신 기본 단가를 쓴 목장이 있는지 */
     priceIsDefault: boolean;
   } | null;
   /** 어떤 숫자가 어디서 왔는지 — 리포트 '근거' 칸에 그대로 쓴다 */
@@ -798,25 +805,29 @@ export function buildImpactFacts({
     sources.push('현장 운영 현황: 부숙관리 시트의 방문 기록으로 앱이 계산 (더미량 = 누적 투입 - 누적 깔개 사용)');
   }
 
-  // ── 톱밥 대체 절감 추정 ──
-  // 같은 무게의 톱밥을 대신한다고 보고, 목장마다 (톤 × 그 목장의 톱밥 단가)로 셈해 더한다.
-  // 매장 수거량(수거관리)은 목장별로 나뉘어 있지 않으므로, 받는 목장이 하나로 정해질 때만 그 목장 단가를 곱한다.
+  // ── 톱밥 구매비 절감 추정 ──
+  // 커피박을 섞어 쓰면 목장의 톱밥 구매가 50% 줄어든다고 본다: min(월 소요량 × 50%, 들어온 커피박) × 톱밥 단가.
+  // 매장 수거량(수거관리)은 목장별로 나뉘어 있지 않으므로, 받는 목장이 하나로 정해질 때만 그 목장에 붙인다.
   const defaultPrice = settings.sawdustPricePerTon;
-  const priceOf = (ranchName: string) => {
-    const own = settings.sawdustPriceByRanch?.[ranchName];
-    return own && own > 0
-      ? { pricePerTon: own, priceSource: 'ranch' as const }
-      : { pricePerTon: defaultPrice, priceSource: 'default' as const };
-  };
-  const saving = (ranchName: string, kg: number): RanchSaving => {
-    const price = priceOf(ranchName);
+  const missingDemand: string[] = [];
+  const saving = (ranchName: string, kg: number): RanchSaving | null => {
+    const result = computeSawdustSaving(settings, ranchName, kg);
+    if (result.savingKrw === null || result.savedTons === null || result.monthlyTons === null) {
+      missingDemand.push(result.ranchName);
+      return null;
+    }
     return {
-      ranchName,
-      tons: round(kg / 1000, 3),
-      ...price,
-      costKrw: Math.round((kg / 1000) * price.pricePerTon),
+      ranchName: result.ranchName,
+      tons: round(result.savedTons, 3),
+      pricePerTon: result.pricePerTon,
+      priceSource: result.priceSource,
+      costKrw: result.savingKrw,
+      monthlyTons: result.monthlyTons,
+      coffeeTons: round(result.coffeeTons, 3),
+      limitedBy: result.limitedBy ?? undefined,
     };
   };
+  const isSaving = (item: RanchSaving | null): item is RanchSaving => item !== null;
 
   // 이번 달 목장별 하역량
   const monthKgByRanch = new Map<string, number>();
@@ -846,11 +857,11 @@ export function buildImpactFacts({
     basisKg = collection.totalKg;
     basisLabel = `이번 달 매장 수거량 (수거관리 시트, ${receivingRanch} 투입)`;
     basisSource = 'collection-gas';
-    byRanch = [saving(receivingRanch, basisKg)];
+    byRanch = [saving(receivingRanch, basisKg)].filter(isSaving);
   } else {
     basisKg = monthCollectedKg;
     basisLabel = '이번 달 목장별 현장 하역량 (부숙관리 시트)';
-    byRanch = monthRanches.map(ranch => saving(ranch, monthKgByRanch.get(ranch) ?? 0));
+    byRanch = monthRanches.map(ranch => saving(ranch, monthKgByRanch.get(ranch) ?? 0)).filter(isSaving);
     if (collection && collection.totalKg > 0) {
       dataWarnings.push(
         '매장 수거량을 받은 목장을 하나로 정할 수 없어, 절감액을 목장별 현장 하역 기록과 목장별 톱밥 단가로 셈했습니다.'
@@ -862,8 +873,12 @@ export function buildImpactFacts({
     }
   }
 
-  const usesDefault = byRanch.some(item => item.priceSource === 'default');
-  const priceIsDefault = usesDefault && defaultPrice === DEFAULT_SAWDUST_PRICE_PER_TON;
+  if (missingDemand.length > 0) {
+    dataWarnings.push(
+      `${missingDemand.join(', ')}의 월 톱밥 소요량이 없어 톱밥 절감액을 셈하지 않았습니다. 설정 > 목장 설정에서 넣어주세요.`
+    );
+  }
+  const priceIsDefault = byRanch.some(item => item.priceSource === 'default');
   const savings =
     basisKg > 0 && byRanch.length > 0
       ? {
@@ -880,17 +895,11 @@ export function buildImpactFacts({
   if (savings) {
     const parts = byRanch.map(
       item =>
-        `${item.ranchName} ${item.tons.toLocaleString('ko-KR')}톤 × ${item.pricePerTon.toLocaleString('ko-KR')}원/톤(${
+        `${item.ranchName} 줄어든 톱밥 ${item.tons.toLocaleString('ko-KR')}톤(월 소요량 ${item.monthlyTons}톤의 50%와 커피박 중 작은 값) × ${item.pricePerTon.toLocaleString('ko-KR')}원/톤(${
           item.priceSource === 'ranch' ? '목장 단가' : '기본 단가'
         })`
     );
-    sources.push(`절감액 추정: ${basisLabel} — ${parts.join(' + ')}`);
-    if (priceIsDefault) {
-      const names = byRanch.filter(item => item.priceSource === 'default').map(item => item.ranchName);
-      dataWarnings.push(
-        `${names.join(', ')}의 톱밥 단가가 임시 가정값(${DEFAULT_SAWDUST_PRICE_PER_TON.toLocaleString('ko-KR')}원/톤)입니다. 설정 > 판정 기준에서 목장별 실제 구매 단가를 넣어주세요.`
-      );
-    }
+    sources.push(`톱밥 절감액 추정: ${basisLabel} — ${parts.join(' + ')}`);
   }
 
   // 대외 보고서 숫자는 매장 수거 실적에서만 나온다 — 수거 자료가 없으면 만들지 않는다 (0kg 로 채우지 않음)

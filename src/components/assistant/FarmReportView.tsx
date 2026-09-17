@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   ArrowLeft,
-  Printer,
   Sparkles,
   Info,
   Calendar,
@@ -16,10 +15,13 @@ import {
   CheckSquare,
   Square,
   ShieldCheck,
+  Share2,
 } from 'lucide-react';
 import type { FarmReportData, FarmBeddingStatus } from '../../services/reportData';
 import { requestFarmAiExplanation } from '../../services/aiReport';
 import { getVisitEvents } from '../../utils/fieldOps';
+import { ExportReportModal } from './ExportReportModal';
+import { FarmAiExplainModal } from './FarmAiExplainModal';
 
 interface Props {
   data: FarmReportData;
@@ -44,9 +46,16 @@ export const FarmReportView: React.FC<Props> = ({
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiModel, setAiModel] = useState<string | null>(null);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isExplainModalOpen, setIsExplainModalOpen] = useState(false);
 
-  const handleFetchAiExplanation = async () => {
-    if (aiExplanation || aiLoading) return;
+  const handleFetchAiExplanation = async (forceRefresh = false) => {
+    if (!forceRefresh && aiExplanation) {
+      setIsExplainModalOpen(true);
+      return;
+    }
+    if (aiLoading) return;
+    setIsExplainModalOpen(true);
     setAiLoading(true);
     try {
       const res = await requestFarmAiExplanation(webhookUrl, data);
@@ -115,28 +124,38 @@ export const FarmReportView: React.FC<Props> = ({
         </button>
 
         <div className="flex items-center gap-2">
-          {!aiExplanation ? (
-            <button
-              type="button"
-              onClick={handleFetchAiExplanation}
-              disabled={aiLoading}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all active:scale-95 disabled:opacity-60 cursor-pointer"
-            >
-              {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              <span>{aiLoading ? 'AI 분석 중...' : 'AI 설명 보기 ✦'}</span>
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setIsExportOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-[#2D6A4F] hover:bg-[#1B4332] text-white shadow-sm transition-all active:scale-95 cursor-pointer"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            <span>내보내기 📤</span>
+          </button>
 
           <button
             type="button"
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-[#1D1D1F] dark:text-[#F5F5F7] transition-all cursor-pointer"
+            onClick={() => handleFetchAiExplanation(false)}
+            disabled={aiLoading}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all active:scale-95 disabled:opacity-60 cursor-pointer"
+            title="AI 종합 현장 진단 소견을 팝업 창으로 확인합니다."
           >
-            <Printer className="w-3.5 h-3.5" />
-            <span>인쇄 · PDF 저장</span>
+            {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            <span>{aiLoading ? 'AI 분석 중...' : 'AI 설명 보기 ✦'}</span>
           </button>
         </div>
       </div>
+
+      {/* 내보내기 모달 */}
+      <ExportReportModal
+        isOpen={isExportOpen}
+        onClose={() => setIsExportOpen(false)}
+        title={`${farm.name} 커피박 부숙 및 현장 운영 리포트`}
+        subtitle={`${period.label} (${period.start} ~ ${period.end}) 현장 점검 및 관리 행동 안내`}
+        audience="farm"
+        farmData={data}
+        webhookUrl={webhookUrl}
+      />
 
       {/* ── 리포트 헤더 ── */}
       <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 border-b border-black/[0.08] dark:border-white/[0.12] pb-4">
@@ -313,9 +332,18 @@ export const FarmReportView: React.FC<Props> = ({
                 <Sparkles className="w-3.5 h-3.5" />
                 AI 현장 상태 요약 ({aiModel})
               </span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold">
-                [AI 제안]
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsExplainModalOpen(true)}
+                  className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 hover:underline cursor-pointer"
+                >
+                  팝업으로 크게 보기 ↗
+                </button>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold">
+                  [AI 제안]
+                </span>
+              </div>
             </div>
             <p className="text-xs sm:text-[13px] text-[#1D1D1F] dark:text-[#F5F5F7] leading-relaxed">
               {aiExplanation}
@@ -713,6 +741,18 @@ export const FarmReportView: React.FC<Props> = ({
         <span>자료 출처: 목장 현장 부숙관리 대장 (카페 수거량 합산 없음)</span>
         <span>지소행 자원순환 사업단 · 스마트 축사 솔루션</span>
       </footer>
+
+      {/* AI 설명 팝업 모달 */}
+      <FarmAiExplainModal
+        isOpen={isExplainModalOpen}
+        onClose={() => setIsExplainModalOpen(false)}
+        farmData={data}
+        aiExplanation={aiExplanation}
+        aiModel={aiModel}
+        isLoading={aiLoading}
+        onRefresh={() => handleFetchAiExplanation(true)}
+        onOpenExport={() => setIsExportOpen(true)}
+      />
     </div>
   );
 };

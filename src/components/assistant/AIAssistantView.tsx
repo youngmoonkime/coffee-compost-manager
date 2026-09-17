@@ -265,14 +265,12 @@ export const AIAssistantView: React.FC = () => {
         ) : (
           <ImpactReportView
             report={report}
+            webhookUrl={webhookUrl}
             reused={reportReused}
             onBack={() => {
               setReport(null);
               setError(null);
             }}
-            onRegenerate={() => void runReport(true)}
-            regenerating={busy}
-            regenerateError={error}
           />
         )}
       </div>
@@ -656,6 +654,7 @@ export const AIAssistantView: React.FC = () => {
                   onClick={() => {
                     setReport(item);
                     setReportReused(true);
+                    setAudience(item.audience);
                   }}
                 >
                   <FileText className="w-4 h-4" />
