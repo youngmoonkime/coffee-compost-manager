@@ -16,6 +16,8 @@ import {
   SETTINGS_VERSION,
   COMPOST_GAS_API_URL,
   LEGACY_DEFAULT_SAWDUST_PRICE_PER_TON,
+  KNOWN_RANCH_SAWDUST_PRICES,
+  KNOWN_RANCH_SAWDUST_MONTHLY_TONS,
 } from '../constants/defaultData';
 import { createCycle, resolveCycle } from '../utils/fieldOps';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../utils/storage';
@@ -110,6 +112,28 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
     sawdustPricePerTon = DEFAULT_SETTINGS.sawdustPricePerTon;
   }
 
+  // 이미 쓰던 기기에도 알려진 목장 단가(다원목장)를 한 번만 넣는다. 사람이 넣은 값은 덮어쓰지 않는다.
+  // 설정이 처음인 기기는 기본값에 이미 들어 있다.
+  const sawdustPriceByRanch =
+    stored.sawdustPriceByRanch === undefined
+      ? { ...DEFAULT_SETTINGS.sawdustPriceByRanch }
+      : normalizeTargets(stored.sawdustPriceByRanch);
+  if (storedVersion < 4) {
+    for (const [ranch, won] of Object.entries(KNOWN_RANCH_SAWDUST_PRICES)) {
+      if (!(ranch in sawdustPriceByRanch)) sawdustPriceByRanch[ranch] = won;
+    }
+  }
+  // 알려진 목장의 월 톱밥 소요량(다원목장 18톤)도 같은 방식으로 한 번만 넣는다
+  const sawdustMonthlyTonsByRanch =
+    stored.sawdustMonthlyTonsByRanch === undefined
+      ? { ...DEFAULT_SETTINGS.sawdustMonthlyTonsByRanch }
+      : normalizeAmounts(stored.sawdustMonthlyTonsByRanch);
+  if (storedVersion < 5) {
+    for (const [ranch, tons] of Object.entries(KNOWN_RANCH_SAWDUST_MONTHLY_TONS)) {
+      if (!(ranch in sawdustMonthlyTonsByRanch)) sawdustMonthlyTonsByRanch[ranch] = tons;
+    }
+  }
+
   return {
     usableMoistureMin,
     usableMoistureMax,
@@ -118,8 +142,8 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
     coreProbeDepthCm: pick('coreProbeDepthCm'),
     beddingTargetKg: normalizeTargets(stored.beddingTargetKg),
     sawdustPricePerTon,
-    sawdustPriceByRanch: normalizeTargets(stored.sawdustPriceByRanch),
-    sawdustMonthlyTonsByRanch: normalizeAmounts(stored.sawdustMonthlyTonsByRanch),
+    sawdustPriceByRanch,
+    sawdustMonthlyTonsByRanch,
     settingsVersion: SETTINGS_VERSION,
   };
 }
@@ -370,12 +394,14 @@ export const CompostProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ...savedRanches,
       ...Object.keys(settings.beddingTargetKg ?? {}),
       ...Object.keys(settings.sawdustPriceByRanch ?? {}),
+      // 수거 & 임팩트에서 톱밥 소요량만 넣은 목장(예: 수거관리의 운영 목장)도 설정에서 고칠 수 있게
+      ...Object.keys(settings.sawdustMonthlyTonsByRanch ?? {}),
       ...Object.keys(cycles),
     ].map(normalizeName);
     const list = [...new Set(all.filter(Boolean))];
     // 아무 목장도 없을 때만 기본 목장을 보여 준다
     return list.length > 0 ? list : [DEFAULT_RANCH_NAME];
-  }, [records, savedRanches, settings.beddingTargetKg, settings.sawdustPriceByRanch, cycles]);
+  }, [records, savedRanches, settings.beddingTargetKg, settings.sawdustPriceByRanch, settings.sawdustMonthlyTonsByRanch, cycles]);
 
   const measuredRanchNames = useMemo(() => {
     const names = [...records]

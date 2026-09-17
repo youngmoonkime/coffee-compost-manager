@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
 import { CARBON_FACTOR_NOTE, COFFEE_GROUNDS_INCINERATION_CO2_PER_KG } from '../../constants/impactFactors';
 import { computeSawdustSaving } from '../../utils/sawdustSaving';
 import { ImpactCard } from './ImpactCard';
 import { OdorImpactCard } from './OdorImpactCard';
+import { TaskModal } from '../assistant/TaskModal';
 
 interface ResourceImpactSectionProps {
   /** 이번 달 매장 수거량 (수거관리 시트 실측) */
@@ -33,6 +35,7 @@ function formatWon(won: number): string {
  */
 export function ResourceImpactSection({ collectedKg, receivingRanch, year, month, periodLabel, isPartialMonth }: ResourceImpactSectionProps) {
   const { settings } = useCompost();
+  const [editingSawdust, setEditingSawdust] = useState(false);
   const kg = Math.max(0, collectedKg);
 
   // 탄소 — 수거량 전량 자원화 가정
@@ -82,9 +85,18 @@ export function ResourceImpactSection({ collectedKg, receivingRanch, year, month
           title="톱밥 구매비 절감 (추정)"
           value={saw.savingKrw === null ? '소요량 입력 필요' : formatWon(saw.savingKrw)}
           sub={
-            saw.savingKrw === null || saw.savedTons === null || saw.monthlyTons === null
-              ? `설정 > 목장 설정에서 ${ranch || '목장'}의 월 톱밥 소요량을 넣으면 계산합니다`
-              : `줄어든 톱밥 ${fmtTons(saw.savedTons)}톤 × ${priceLabel}`
+            !ranch
+              ? '수거관리 시트에 이 달의 운영 목장 정보가 없어 계산하지 않습니다'
+              : saw.savingKrw === null || saw.savedTons === null || saw.monthlyTons === null
+                ? `${ranch}의 월 톱밥 소요량을 넣으면 계산합니다`
+                : `${ranch} · 줄어든 톱밥 ${fmtTons(saw.savedTons)}톤 × ${priceLabel}`
+          }
+          action={
+            ranch ? (
+              <button type="button" className="collection-impact__impact-button" onClick={() => setEditingSawdust(true)}>
+                {ranch} 톱밥 설정
+              </button>
+            ) : undefined
           }
           infoLabel="톱밥 절감 근거"
           info={
@@ -116,6 +128,88 @@ export function ResourceImpactSection({ collectedKg, receivingRanch, year, month
 
         <OdorImpactCard year={year} month={month} receivingRanch={receivingRanch} />
       </div>
+
+      {editingSawdust && ranch && <SawdustSettingModal ranch={ranch} onClose={() => setEditingSawdust(false)} />}
     </section>
+  );
+}
+
+const fieldClass =
+  'w-full h-10 rounded-lg bg-[#F2F2F7] dark:bg-[#2C2C2E] px-2.5 text-sm text-[#1D1D1F] dark:text-[#F5F5F7] border border-black/5 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-[#315C36]/40';
+
+/**
+ * 수거관리의 운영 목장(예: 다원목장)은 부숙 기록이 없어 설정 목록에 없을 수 있다.
+ * 이 창에서 그 목장의 톱밥 단가·월 소요량을 바로 넣는다 — 넣고 나면 설정 > 목장 설정에도 탭이 생긴다.
+ */
+function SawdustSettingModal({ ranch, onClose }: { ranch: string; onClose: () => void }) {
+  const { settings, updateSettings } = useCompost();
+  const [price, setPrice] = useState(String(settings.sawdustPriceByRanch?.[ranch] ?? ''));
+  const [monthly, setMonthly] = useState(String(settings.sawdustMonthlyTonsByRanch?.[ranch] ?? ''));
+
+  const priceNum = Number(price);
+  const monthlyNum = Number(monthly);
+  const priceOk = price.trim() === '' || (Number.isFinite(priceNum) && priceNum > 0);
+  const monthlyOk = monthly.trim() === '' || (Number.isFinite(monthlyNum) && monthlyNum > 0);
+
+  const save = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!priceOk || !monthlyOk) return;
+    const prices = { ...settings.sawdustPriceByRanch };
+    const demands = { ...settings.sawdustMonthlyTonsByRanch };
+    if (price.trim() === '') delete prices[ranch];
+    else prices[ranch] = Math.round(priceNum);
+    if (monthly.trim() === '') delete demands[ranch];
+    else demands[ranch] = Math.round(monthlyNum * 10) / 10;
+    updateSettings({ sawdustPriceByRanch: prices, sawdustMonthlyTonsByRanch: demands });
+    onClose();
+  };
+
+  return (
+    <TaskModal title={`${ranch} 톱밥 설정`} subtitle="톱밥 구매비 절감 계산에 씁니다 · 설정 > 목장 설정과 같은 값" onClose={onClose}>
+      <form onSubmit={save} className="flex flex-col gap-3">
+        <label className="flex flex-col gap-1 text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">
+          월 톱밥 소요량 (톤/월)
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step={0.5}
+            placeholder="예: 18"
+            value={monthly}
+            onChange={e => setMonthly(e.target.value)}
+            className={fieldClass}
+          />
+          <span className="font-normal">한 달에 실제로 사는 톱밥 양입니다. 축종·두수·계절에 따라 크게 달라집니다 (예: 한우 100두 월 15~20톤).</span>
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">
+          톱밥 구매 단가 (원/톤)
+          <input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1000}
+            placeholder={`비우면 기본 단가 ${settings.sawdustPricePerTon.toLocaleString('ko-KR')}원`}
+            value={price}
+            onChange={e => setPrice(e.target.value)}
+            className={fieldClass}
+          />
+        </label>
+        {(!priceOk || !monthlyOk) && (
+          <p role="alert" className="text-xs text-[#C5221F] dark:text-[#FF6961]">0보다 큰 숫자를 넣거나 비워 두세요.</p>
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="h-10 px-4 rounded-xl text-sm font-semibold text-[#6E6E73] dark:text-[#8E8E93]">
+            취소
+          </button>
+          <button
+            type="submit"
+            disabled={!priceOk || !monthlyOk}
+            className="h-10 px-4 rounded-xl bg-[#315C36] text-white text-sm font-bold disabled:opacity-40"
+          >
+            저장
+          </button>
+        </div>
+      </form>
+    </TaskModal>
   );
 }
