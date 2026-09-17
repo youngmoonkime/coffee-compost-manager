@@ -132,10 +132,10 @@ export const SimulationView: React.FC = () => {
   /** 테마가 바뀌었을 때 3D 장면만 다시 그리게 하는 연결 고리 */
   const redrawRef = useRef<(() => void) | null>(null);
   /** 효과를 다시 만들지 않고도 최신 콜백을 쓰기 위한 보관함 */
-  const handlersRef = useRef({ setActiveTab, toggleTheme });
+  const handlersRef = useRef({ setActiveTab, toggleTheme, setSelectedInfoKey });
 
   useEffect(() => {
-    handlersRef.current = { setActiveTab, toggleTheme };
+    handlersRef.current = { setActiveTab, toggleTheme, setSelectedInfoKey };
   });
 
   useEffect(() => {
@@ -1272,9 +1272,22 @@ export const SimulationView: React.FC = () => {
       }
     });
 
+    // 근거 자료(i) 버튼 클릭 연동
+    root.querySelectorAll<HTMLButtonElement>('.info-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        e.preventDefault();
+        const key = btn.dataset.infoKey;
+        if (key) {
+          handlersRef.current.setSelectedInfoKey(key);
+        }
+      });
+    });
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSheet(false);
+        handlersRef.current.setSelectedInfoKey(null);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
@@ -1320,7 +1333,8 @@ export const SimulationView: React.FC = () => {
   }, [theme]);
 
   return (
-    <div id="barn-module" ref={containerRef}>
+    <>
+      <div id="barn-module" ref={containerRef}>
       {/* 상단 네비게이션 헤더: 박스형이 아닌 슬림한 인라인 헤더로 공간 최적화 */}
       <header className="apple-header">
         <div className="apple-header-left">
@@ -1536,8 +1550,8 @@ export const SimulationView: React.FC = () => {
             <h3>시뮬레이션 결과</h3>
             <button
               type="button"
-              onClick={() => setSelectedInfoKey('overview')}
               className="info-btn"
+              data-info-key="overview"
               title="산출 근거 종합 안내 보기"
               aria-label="산출 근거 종합 안내 보기"
             >
@@ -1552,8 +1566,8 @@ export const SimulationView: React.FC = () => {
               <span>예상 악취 변화</span>
               <button
                 type="button"
-                onClick={() => setSelectedInfoKey('odor')}
                 className="info-btn"
+                data-info-key="odor"
                 title="예상 악취 변화 근거 자료 보기"
                 aria-label="예상 악취 변화 근거 자료 보기"
               >
@@ -1572,8 +1586,8 @@ export const SimulationView: React.FC = () => {
               <span>예상 톱밥 구매 절감</span>
               <button
                 type="button"
-                onClick={() => setSelectedInfoKey('saving')}
                 className="info-btn"
+                data-info-key="saving"
                 title="톱밥 구매 절감 근거 자료 보기"
                 aria-label="톱밥 구매 절감 근거 자료 보기"
               >
@@ -1590,8 +1604,8 @@ export const SimulationView: React.FC = () => {
               <span>경과</span>
               <button
                 type="button"
-                onClick={() => setSelectedInfoKey('cycle')}
                 className="info-btn"
+                data-info-key="cycle"
                 title="경과 일수 및 혼합비 근거 자료 보기"
                 aria-label="경과 일수 및 혼합비 근거 자료 보기"
               >
@@ -1618,8 +1632,8 @@ export const SimulationView: React.FC = () => {
                 <span>커피박 사용량</span>
                 <button
                   type="button"
-                  onClick={() => setSelectedInfoKey('mass')}
                   className="info-btn"
+                  data-info-key="mass"
                   title="커피박 사용량 산출 기준 보기"
                   aria-label="커피박 사용량 산출 기준 보기"
                 >
@@ -1635,8 +1649,8 @@ export const SimulationView: React.FC = () => {
                 <span>축사 크기</span>
                 <button
                   type="button"
-                  onClick={() => setSelectedInfoKey('size')}
                   className="info-btn"
+                  data-info-key="size"
                   title="축사 규격 산출 기준 보기"
                   aria-label="축사 규격 산출 기준 보기"
                 >
@@ -1652,8 +1666,8 @@ export const SimulationView: React.FC = () => {
                 <span>센서</span>
                 <button
                   type="button"
-                  onClick={() => setSelectedInfoKey('sensor')}
                   className="info-btn"
+                  data-info-key="sensor"
                   title="센서 배치 및 공간 보간 근거 보기"
                   aria-label="센서 배치 및 공간 보간 근거 보기"
                 >
@@ -1667,85 +1681,86 @@ export const SimulationView: React.FC = () => {
           </div>
         </div>
       </section>
+    </div>
 
-      {/* 근거 자료 및 출처 상세 안내 모달 */}
-      {selectedInfoKey && SIMULATION_EVIDENCES[selectedInfoKey] && (
+    {/* 근거 자료 및 출처 상세 안내 모달 (barn-module DOM 복제 영향 받지 않도록 외부에 렌더링) */}
+    {selectedInfoKey && SIMULATION_EVIDENCES[selectedInfoKey] && (
+      <div
+        className="evidence-modal-overlay"
+        onClick={() => setSelectedInfoKey(null)}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="evidence-modal-title"
+      >
         <div
-          className="evidence-modal-overlay"
-          onClick={() => setSelectedInfoKey(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="evidence-modal-title"
+          className="evidence-modal-content"
+          onClick={e => e.stopPropagation()}
         >
-          <div
-            className="evidence-modal-content"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="evidence-modal-header">
-              <div className="evidence-modal-title-wrap">
-                <span className="evidence-badge">
-                  {SIMULATION_EVIDENCES[selectedInfoKey].badge}
-                </span>
-                <h4 id="evidence-modal-title" className="evidence-modal-title">
-                  {SIMULATION_EVIDENCES[selectedInfoKey].title}
-                </h4>
-              </div>
-              <button
-                type="button"
-                className="evidence-close-btn"
-                onClick={() => setSelectedInfoKey(null)}
-                aria-label="닫기"
-              >
-                ✕
-              </button>
+          <div className="evidence-modal-header">
+            <div className="evidence-modal-title-wrap">
+              <span className="evidence-badge">
+                {SIMULATION_EVIDENCES[selectedInfoKey].badge}
+              </span>
+              <h4 id="evidence-modal-title" className="evidence-modal-title">
+                {SIMULATION_EVIDENCES[selectedInfoKey].title}
+              </h4>
             </div>
+            <button
+              type="button"
+              className="evidence-close-btn"
+              onClick={() => setSelectedInfoKey(null)}
+              aria-label="닫기"
+            >
+              ✕
+            </button>
+          </div>
 
-            <div className="evidence-modal-body">
-              <div className="evidence-section">
-                <div className="evidence-section-label">
-                  <span className="evidence-icon">🏛</span> 출처 및 참고 연구
-                </div>
-                <div className="evidence-source-box">
-                  {SIMULATION_EVIDENCES[selectedInfoKey].source}
-                </div>
+          <div className="evidence-modal-body">
+            <div className="evidence-section">
+              <div className="evidence-section-label">
+                <span className="evidence-icon">🏛</span> 출처 및 참고 연구
               </div>
-
-              <div className="evidence-section">
-                <div className="evidence-section-label">
-                  <span className="evidence-icon">💡</span> 산출 원리 및 개요
-                </div>
-                <p className="evidence-summary-text">
-                  {SIMULATION_EVIDENCES[selectedInfoKey].summary}
-                </p>
-              </div>
-
-              <div className="evidence-section">
-                <div className="evidence-section-label">
-                  <span className="evidence-icon">📋</span> 과학적 근거 및 신빙성 요소
-                </div>
-                <ul className="evidence-detail-list">
-                  {SIMULATION_EVIDENCES[selectedInfoKey].details.map((detail, idx) => (
-                    <li key={idx} className="evidence-detail-item">
-                      <span className="evidence-bullet">•</span>
-                      <span>{detail}</span>
-                    </li>
-                  ))}
-                </ul>
+              <div className="evidence-source-box">
+                {SIMULATION_EVIDENCES[selectedInfoKey].source}
               </div>
             </div>
 
-            <div className="evidence-modal-footer">
-              <button
-                type="button"
-                className="evidence-confirm-btn"
-                onClick={() => setSelectedInfoKey(null)}
-              >
-                확인
-              </button>
+            <div className="evidence-section">
+              <div className="evidence-section-label">
+                <span className="evidence-icon">💡</span> 산출 원리 및 개요
+              </div>
+              <p className="evidence-summary-text">
+                {SIMULATION_EVIDENCES[selectedInfoKey].summary}
+              </p>
+            </div>
+
+            <div className="evidence-section">
+              <div className="evidence-section-label">
+                <span className="evidence-icon">📋</span> 과학적 근거 및 신빙성 요소
+              </div>
+              <ul className="evidence-detail-list">
+                {SIMULATION_EVIDENCES[selectedInfoKey].details.map((detail, idx) => (
+                  <li key={idx} className="evidence-detail-item">
+                    <span className="evidence-bullet">•</span>
+                    <span>{detail}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
+
+          <div className="evidence-modal-footer">
+            <button
+              type="button"
+              className="evidence-confirm-btn"
+              onClick={() => setSelectedInfoKey(null)}
+            >
+              확인
+            </button>
+          </div>
         </div>
-      )}
-    </div>
+      </div>
+    )}
+  </>
   );
 };
