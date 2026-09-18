@@ -59,7 +59,7 @@ const SIMULATION_EVIDENCES: Record<string, SimulationEvidence> = {
   size: {
     title: '축사 크기 및 면적',
     badge: '한우 표준 축사 건축 규격',
-    source: '다원목장 측정동 현장 실측 및 농가 축사 표준 규격',
+    source: '측정동 현장 실측 및 농가 축사 표준 규격',
     summary: '측정동 축사의 길이(m)와 폭(m)을 곱한 유효 바닥 면적(㎡)입니다.',
     details: [
       '축사 바닥 면적은 필요한 총 깔개 부피와 사육 두수별 가스 확산 면적을 결정하는 기본 기준값입니다.',
@@ -132,16 +132,20 @@ export const SimulationView: React.FC = () => {
   const settingsRef = useRef(settings);
   const { theme, toggleTheme } = useTheme();
   const [selectedInfoKey, setSelectedInfoKey] = useState<string | null>(null);
+  /** 삭제를 누르면 바로 지우지 않고 한 번 되묻는다 (휴대폰에서 잘못 눌러 사라지는 일을 막는다) */
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; onlyOne: boolean } | null>(null);
+  /** 확인 창에서 [삭제]를 눌렀을 때 실제로 지우는 함수 — 아래 효과가 채운다 */
+  const removeBarnRef = useRef<((id: number) => void) | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   /** 처음 그려진 마크업. 아래 효과가 다시 돌 때 항상 이 상태에서 시작한다 */
   const pristineRef = useRef<DocumentFragment | null>(null);
   /** 테마가 바뀌었을 때 3D 장면만 다시 그리게 하는 연결 고리 */
   const redrawRef = useRef<(() => void) | null>(null);
   /** 효과를 다시 만들지 않고도 최신 콜백을 쓰기 위한 보관함 */
-  const handlersRef = useRef({ setActiveTab, toggleTheme, setSelectedInfoKey });
+  const handlersRef = useRef({ setActiveTab, toggleTheme, setSelectedInfoKey, setDeleteTarget });
 
   useEffect(() => {
-    handlersRef.current = { setActiveTab, toggleTheme, setSelectedInfoKey };
+    handlersRef.current = { setActiveTab, toggleTheme, setSelectedInfoKey, setDeleteTarget };
     settingsRef.current = settings;
   });
 
@@ -181,7 +185,7 @@ export const SimulationView: React.FC = () => {
     const c2d = ctx;
 
     const defaults: Omit<BarnData, 'id'> = {
-      name: '다원목장 · 측정동',
+      name: '우리 목장 · 측정동',
       length: 30,
       width: 22,
       x: 0,
@@ -486,7 +490,7 @@ export const SimulationView: React.FC = () => {
         sel.value = String(selected);
       }
       const rem = q<HTMLButtonElement>('remove');
-      if (rem) rem.disabled = barns.length === 1;
+      if (rem) rem.classList.toggle('is-locked', barns.length === 1);
     }
 
     const fields: (keyof BarnData)[] = [
@@ -1122,11 +1126,20 @@ export const SimulationView: React.FC = () => {
       load();
     });
 
-    q('remove')?.addEventListener('click', () => {
+    removeBarnRef.current = (id: number) => {
       if (barns.length === 1) return;
-      barns = barns.filter(t => t.id !== selected);
+      barns = barns.filter(t => t.id !== id);
       selected = barns[0].id;
       load();
+    };
+
+    q('remove')?.addEventListener('click', () => {
+      const target = barns.find(t => t.id === selected);
+      handlersRef.current.setDeleteTarget({
+        id: selected,
+        name: target?.name || '축사',
+        onlyOne: barns.length === 1,
+      });
     });
 
     q('left')?.addEventListener('click', () => {
@@ -1254,23 +1267,70 @@ export const SimulationView: React.FC = () => {
     overlaySheet.className = 'apple-mobile-overlay';
     document.body.append(overlaySheet);
 
-    const setSheet = (open: boolean) => {
-      inspector.classList.toggle('sheet-open', open);
-      overlaySheet.classList.toggle('show', open);
-      // 팝업이 떠 있는 동안 뒤 화면이 같이 밀리지 않게 한다
-      document.body.classList.toggle('barn-sheet-open', open);
-      if (open) {
+    /*
+     * 휴대폰 설정 창은 세 가지 높이를 가진다.
+     *  - closed: 내려가 있다
+     *  - peek  : 화면 아래 절반만 차지한다. 값을 고치는 동안 위쪽 3D가 그대로 보여야 하므로
+     *            뒤를 어둡게 덮지 않고 뒤 화면 스크롤도 막지 않는다.
+     *  - full  : 설정 항목이 많을 때 손잡이를 위로 끌어 올린 상태. 이때만 덮개를 깐다.
+     */
+    type SheetState = 'closed' | 'peek' | 'full';
+    let sheetState: SheetState = 'closed';
+
+    const setSheetState = (next: SheetState) => {
+      const opening = sheetState === 'closed' && next !== 'closed';
+      sheetState = next;
+      inspector.classList.toggle('sheet-open', next !== 'closed');
+      inspector.classList.toggle('sheet-full', next === 'full');
+      overlaySheet.classList.toggle('show', next === 'full');
+      document.body.classList.toggle('barn-sheet-open', next === 'full');
+      document.body.classList.toggle('barn-sheet-peek', next === 'peek');
+      if (opening) {
         inspector.scrollTop = 0;
-        // 값을 고치는 동안 3D 화면이 팝업 위쪽에 보이도록 맞춘다
+        // 값을 고치는 동안 3D 화면이 설정 창 위쪽에 보이도록 맞춘다
         if (isMobile()) scene?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }
     };
 
+    const setSheet = (open: boolean) => setSheetState(open ? 'peek' : 'closed');
+
     inspector.querySelector('h3')?.addEventListener('click', () => {
-      if (isMobile()) setSheet(!inspector.classList.contains('sheet-open'));
+      if (isMobile()) setSheet(sheetState === 'closed');
     });
 
-    inspector.querySelector('.mobile-sheet-handle')?.addEventListener('click', () => setSheet(false));
+    // 손잡이 — 위로 끌면 전체 높이, 아래로 끌면 반높이 → 닫힘, 톡 누르면 닫힘
+    const handle = inspector.querySelector<HTMLElement>('.mobile-sheet-handle');
+    if (handle) {
+      const DRAG_THRESHOLD = 40;
+      let dragging = false;
+      let startY = 0;
+      let movedY = 0;
+      handle.addEventListener('pointerdown', e => {
+        dragging = true;
+        startY = e.clientY;
+        movedY = 0;
+        try {
+          handle.setPointerCapture(e.pointerId);
+        } catch {
+          /* 포인터를 못 잡아도 아래 pointermove 로 따라간다 */
+        }
+      });
+      handle.addEventListener('pointermove', e => {
+        if (dragging) movedY = e.clientY - startY;
+      });
+      const endDrag = () => {
+        if (!dragging) return;
+        dragging = false;
+        if (movedY < -DRAG_THRESHOLD) setSheetState('full');
+        else if (movedY > DRAG_THRESHOLD) setSheetState(sheetState === 'full' ? 'peek' : 'closed');
+        else setSheetState('closed');
+      };
+      handle.addEventListener('pointerup', endDrag);
+      handle.addEventListener('pointercancel', () => {
+        dragging = false;
+      });
+    }
+
     inspector.querySelector('#bm-sheet-close')?.addEventListener('click', () => setSheet(false));
     overlaySheet.addEventListener('click', () => setSheet(false));
 
@@ -1306,6 +1366,7 @@ export const SimulationView: React.FC = () => {
       if (e.key === 'Escape') {
         setSheet(false);
         handlersRef.current.setSelectedInfoKey(null);
+        handlersRef.current.setDeleteTarget(null);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
@@ -1337,8 +1398,10 @@ export const SimulationView: React.FC = () => {
       canvas.removeEventListener('lostpointercapture', handlePointerUp);
       document.removeEventListener('keydown', handleKeyDown);
       wide.removeEventListener('change', handleWide);
+      removeBarnRef.current = null;
       viewHost?.classList.remove('barn-view-host');
       document.body.classList.remove('barn-sheet-open');
+      document.body.classList.remove('barn-sheet-peek');
       overlaySheet.remove();
       redrawRef.current = null;
     };
@@ -1379,16 +1442,13 @@ export const SimulationView: React.FC = () => {
             ⚙ 축사 설정
           </button>
           <button id="bm-remove" className="cursor-interaction" type="button">
-            선택 축사 삭제
+            <span className="barn-btn-long">선택 축사 </span>삭제
           </button>
         </div>
-        <p className="muted">
-          다원목장 방식의 예시 배치입니다. 초기 30 × 22m는 기존 그림의 부분 구역을 참고한 임시값이며, 현장 실측 규격이 아닙니다.
-        </p>
         <div className="fields">
           <label>
             축사 이름
-            <input id="bm-name" defaultValue="다원목장 · 측정동" />
+            <input id="bm-name" defaultValue="우리 목장 · 측정동" />
           </label>
           <label>
             길이 · 앞→뒤 (m)
@@ -1473,9 +1533,6 @@ export const SimulationView: React.FC = () => {
         </div>
         <div id="bm-status" className="status" aria-live="polite"></div>
         <div id="bm-error" className="error" role="alert"></div>
-        <span className="muted">
-          색상은 예시값 2점을 연결한 공간 보간입니다. 실측 분포나 기류 해석이 아니며, 암모니아 센서 ppm과 다른 지표입니다.
-        </span>
       </div>
 
       {/* 센서 설정 패널 */}
@@ -1542,7 +1599,7 @@ export const SimulationView: React.FC = () => {
           </label>
         </div>
         <p className="muted">
-          시간 변화는 이전 한우 연구의 상대 변화율을 적용한 가정입니다. 도포량·축사 크기로 효과를 보정하지 않으며, 다원목장 예측값이 아닙니다.
+          시간 변화는 이전 한우 연구의 상대 변화율을 적용한 가정입니다. 도포량·축사 크기로 효과를 보정하지 않으며, 특정 목장의 예측값이 아닙니다.
         </p>
         <div id="bm-saving" className="status" aria-live="polite"></div>
         <details>
@@ -1702,6 +1759,65 @@ export const SimulationView: React.FC = () => {
         </div>
       </section>
     </div>
+
+    {/* 축사 삭제 확인 — 누르는 즉시 지우지 않는다 */}
+    {deleteTarget && (
+      <div
+        className="evidence-modal-overlay"
+        onClick={() => setDeleteTarget(null)}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="barn-delete-title"
+      >
+        <div className="evidence-modal-content" onClick={e => e.stopPropagation()}>
+          <div className="evidence-modal-header">
+            <div className="evidence-modal-title-wrap">
+              <h4 id="barn-delete-title" className="evidence-modal-title">
+                {deleteTarget.onlyOne ? '지울 수 없습니다' : '이 축사를 지울까요?'}
+              </h4>
+            </div>
+            <button
+              type="button"
+              className="evidence-close-btn"
+              onClick={() => setDeleteTarget(null)}
+              aria-label="닫기"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="evidence-modal-body">
+            <p>
+              {deleteTarget.onlyOne
+                ? '축사가 하나뿐이라 지울 수 없습니다. 먼저 [축사 추가]로 다른 동을 만든 뒤 지워 주세요.'
+                : `‘${deleteTarget.name}’을 시뮬레이션 목록에서 지웁니다. 되돌릴 수 없습니다. 부숙 기록과 현장 점검 자료는 그대로 남습니다.`}
+            </p>
+          </div>
+          <div className="barn-confirm-actions">
+            {deleteTarget.onlyOne ? (
+              <button type="button" onClick={() => setDeleteTarget(null)}>
+                확인
+              </button>
+            ) : (
+              <>
+                <button type="button" onClick={() => setDeleteTarget(null)}>
+                  취소
+                </button>
+                <button
+                  type="button"
+                  className="barn-confirm-danger"
+                  onClick={() => {
+                    removeBarnRef.current?.(deleteTarget.id);
+                    setDeleteTarget(null);
+                  }}
+                >
+                  삭제
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* 근거 자료 및 출처 상세 안내 모달 (barn-module DOM 복제 영향 받지 않도록 외부에 렌더링) */}
     {selectedInfoKey && SIMULATION_EVIDENCES[selectedInfoKey] && (
