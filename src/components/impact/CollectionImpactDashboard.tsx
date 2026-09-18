@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutList, Table as TableIcon, Search } from 'lucide-react';
 import { gasApi, getCollectionSheetUrl, type CollectionData, type DashboardData } from '../../services/gasClient';
 import { isImplausiblePrevious } from '../../services/reportData';
@@ -64,6 +64,9 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
   const [collections, setCollections] = useState<CollectionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 지금 보고 있는 숫자를 언제 읽어 온 것인지 */
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
+  const loadedAtRef = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,6 +78,8 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
       ]);
       setDashboard(dashboardData);
       setCollections(collectionData);
+      loadedAtRef.current = Date.now();
+      setLoadedAt(new Date());
     } catch (err) {
       setDashboard(null);
       setCollections(null);
@@ -87,6 +92,33 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
   useEffect(() => {
     void load();
   }, [load]);
+
+  /*
+   * 휴대폰에서 앱을 닫았다 다시 열면 화면만 되살아나고 코드는 다시 돌지 않는다.
+   * 그러면 시트에 새 수거량을 넣어도 옛 숫자가 그대로 보인다.
+   * 화면으로 돌아왔을 때 마지막으로 읽은 지 오래됐으면 조용히 다시 읽는다.
+   */
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  });
+
+  useEffect(() => {
+    const STALE_MS = 60_000;
+    const refreshIfStale = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      if (Date.now() - loadedAtRef.current < STALE_MS) return;
+      void loadRef.current();
+    };
+    document.addEventListener('visibilitychange', refreshIfStale);
+    window.addEventListener('pageshow', refreshIfStale);
+    window.addEventListener('focus', refreshIfStale);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshIfStale);
+      window.removeEventListener('pageshow', refreshIfStale);
+      window.removeEventListener('focus', refreshIfStale);
+    };
+  }, []);
 
   // 지난달 값이 이번 달과 자릿수부터 다르면(수거 시트 집계 오류) 비교를 숨긴다
   const previousBroken =
@@ -185,7 +217,14 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
               ))}
             </select>
           </label>
-          <button type="button" onClick={() => void load()} disabled={loading}>새로고침</button>
+          <button type="button" onClick={() => void load()} disabled={loading}>
+            {loading ? '불러오는 중…' : '새로고침'}
+          </button>
+          {loadedAt && (
+            <span className="collection-impact__loaded-at" aria-live="polite">
+              {loadedAt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준
+            </span>
+          )}
           <a
             href={sheetUrl}
             target="_blank"

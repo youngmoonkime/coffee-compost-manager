@@ -1103,3 +1103,12 @@ html.dark .collection-impact {
   background: var(--ci-green-soft);
   color: var(--ci-green);
 }
+
+/* 지금 보고 있는 숫자를 언제 읽어 온 것인지 — 새로고침 버튼 옆 */
+.collection-impact__loaded-at {
+  align-self: center;
+  color: var(--ci-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
