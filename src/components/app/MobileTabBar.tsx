@@ -4,6 +4,11 @@ import { useCompost } from '../../contexts/CompostContext';
 import { useAccess } from '../../contexts/AccessContext';
 import type { ActiveTab } from '../../types';
 
+interface MobileTabBarProps {
+  /** 읽어 내려가는 동안 true — 탭바를 아래로 치운다 */
+  hidden?: boolean;
+}
+
 interface NavItem {
   id: ActiveTab;
   label: string;
@@ -15,10 +20,13 @@ interface NavItem {
  * - 3개 핵심 탭 구성: 현장점검, 측정, 현황
  * - iOS 스타일의 미니멀 블러 글래스모피즘 & 부드러운 슬라이딩 인디케이터
  * - 가벼운 햅틱 및 스와이프 제스처 지원
+ * - 본문을 읽어 내려가는 동안에는 아래로 미끄러져 숨는다 (hidden)
  */
-export const MobileTabBar: React.FC = () => {
+export const MobileTabBar: React.FC<MobileTabBarProps> = ({ hidden = false }) => {
   const { activeTab, setActiveTab, setHistoryPileKey, setRanchPicked } = useCompost();
   const { isManager } = useAccess();
+  // 가벼운 좌우 스와이프 제스처 — 훅은 아래 조건부 반환보다 먼저 부른다
+  const touchStartX = useRef<number>(0);
 
   // 모바일 핵심 3대 탭 (시뮬레이션 제외)
   const navItems: NavItem[] = [
@@ -43,8 +51,6 @@ export const MobileTabBar: React.FC = () => {
     setActiveTab(item.id);
   };
 
-  // 가벼운 좌우 스와이프 제스처
-  const touchStartX = useRef<number>(0);
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
   };
@@ -65,14 +71,16 @@ export const MobileTabBar: React.FC = () => {
   return (
     <aside
       aria-label="모바일 하단 내비게이션"
-      className="md:hidden fixed bottom-4 left-0 right-0 z-40 flex justify-center pointer-events-none px-4 pb-safe"
+      className={`md:hidden fixed bottom-4 left-0 right-0 z-40 flex justify-center pointer-events-none px-4 pb-safe transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none ${
+        hidden ? 'translate-y-[160%] opacity-0' : 'translate-y-0 opacity-100'
+      }`}
     >
       <nav
         role="navigation"
         aria-label="하단 주요 메뉴"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
-        className="pointer-events-auto relative w-full max-w-[320px] h-[64px] p-1.5 rounded-[32px] bg-white/80 dark:bg-[#1c1c1e]/85 backdrop-blur-2xl border border-black/[0.08] dark:border-white/[0.12] shadow-[0_10px_35px_-5px_rgba(0,0,0,0.14),0_2px_8px_rgba(0,0,0,0.06)] select-none"
+        className={`${hidden ? 'pointer-events-none' : 'pointer-events-auto'} relative w-full max-w-[320px] h-[64px] p-1.5 rounded-[32px] bg-white/80 dark:bg-[#1c1c1e]/85 backdrop-blur-2xl border border-black/[0.08] dark:border-white/[0.12] shadow-[0_10px_35px_-5px_rgba(0,0,0,0.14),0_2px_8px_rgba(0,0,0,0.06)] select-none`}
       >
         {/* 부드러운 슬라이딩 활성 캡슐 (Sliding Active Pill) */}
         <div

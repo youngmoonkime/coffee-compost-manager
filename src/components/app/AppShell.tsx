@@ -3,6 +3,7 @@ import { useCompost } from '../../contexts/CompostContext';
 import { AppHeader } from './AppHeader';
 import { DesktopSidebar } from './DesktopSidebar';
 import { MobileTabBar } from './MobileTabBar';
+import { useAutoHideOnScroll } from '../../utils/useAutoHideOnScroll';
 
 import { useAccess } from '../../contexts/AccessContext';
 
@@ -20,6 +21,8 @@ export const AppShell: React.FC<AppShellProps> = ({
   const { activeTab } = useCompost();
   const { isManager } = useAccess();
   const mainRef = useRef<HTMLElement>(null);
+  /** 읽어 내려가는 동안에는 하단 탭바를 치워 둔다 */
+  const tabBarHidden = useAutoHideOnScroll(mainRef, activeTab);
 
   // 탭 전환 시 스크롤 상단 리셋
   useEffect(() => {
@@ -49,7 +52,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         </main>
 
         {/* 모바일 하단 탭 바 */}
-        <MobileTabBar />
+        <MobileTabBar hidden={tabBarHidden} />
       </div>
     </div>
   );
