@@ -719,7 +719,7 @@ export const SettingsView: React.FC = () => {
             <div className="pt-3 border-t border-black/5 dark:border-white/10 space-y-1 text-xs text-[#6E6E73] dark:text-[#8E8E93]">
               <div className="flex justify-between">
                 <span>애플리케이션 버전</span>
-                <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">v2.4.0</span>
+                <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">v1.0</span>
               </div>
               <div className="flex justify-between">
                 <span>적용 목장</span>

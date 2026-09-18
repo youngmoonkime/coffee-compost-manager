@@ -95,10 +95,10 @@ export const AccessProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (typeof document === 'undefined') return;
     document.title =
       status !== 'ready' || !info
-        ? '커피박 부숙 관리'
+        ? 'C.TRACK · 커피박 자원순환'
         : info.role === 'manager'
-          ? `${info.ranch} 현장점검 · 커피박 부숙 관리`
-          : '커피박 부숙 관리 · 직원용';
+          ? `${info.ranch} 현장점검 · C.TRACK`
+          : 'C.TRACK · 직원용';
   }, [status, info]);
 
   const recheck = useCallback(() => {

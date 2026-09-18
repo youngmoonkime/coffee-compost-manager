@@ -42,7 +42,8 @@ export const AccessGate: React.FC<{ children: React.ReactNode }> = ({ children }
       >
         <div className="flex flex-col items-center text-center gap-2">
           <img src="/logo.png" alt="" className="w-12 h-12 object-contain" />
-          <h1 className="text-lg font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">커피박 부숙 관리</h1>
+          <h1 className="text-lg font-bold text-[#1D1D1F] dark:text-[#F5F5F7]">C.TRACK</h1>
+          <p className="text-[12px] font-semibold text-[#315C36] dark:text-[#34C759] -mt-1">커피박 자원순환 시스템</p>
           <p className="text-[13px] text-[#6E6E73] dark:text-[#8E8E93] break-keep">
             회사 또는 목장에서 받은 접속 코드를 입력해주세요.
           </p>

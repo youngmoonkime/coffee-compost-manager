@@ -58,10 +58,12 @@ export const DesktopSidebar: React.FC = () => {
           />
           <div className="min-w-0">
             <h1 className="font-bold text-[16px] text-[#1D1D1F] dark:text-[#F5F5F7] tracking-tight leading-tight">
-              커피박 부숙 관리
+              C.TRACK
             </h1>
-            {managerRanch && (
+            {managerRanch ? (
               <span className="text-[11px] font-semibold text-[#315C36] dark:text-[#34C759]">{managerRanch} 매니저</span>
+            ) : (
+              <span className="text-[11px] text-[#6E6E73] dark:text-[#8E8E93]">커피박 자원순환 시스템</span>
             )}
           </div>
         </div>

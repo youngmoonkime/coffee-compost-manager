@@ -40,15 +40,21 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           </div>
           <div>
             <h3 id="about-modal-title" className="text-xl font-bold tracking-tight">
-              커피박 부숙 관리
+              C.TRACK
             </h3>
-            <p className="text-xs text-[#8E8E93] mt-0.5">
+            <p className="text-[13px] font-semibold text-[#315C36] dark:text-[#34C759] mt-0.5">
+              커피박 자원순환 시스템
+            </p>
+            <p className="text-[11px] text-[#8E8E93] mt-1">
+              Coffee Traceability, Resource &amp; Asset Control Kit
+            </p>
+            <p className="text-xs text-[#8E8E93] mt-1.5">
               건준목장 x 지구를 지키는 소소한 행동
             </p>
           </div>
 
           <div className="py-2 inline-flex items-center gap-1 px-3 rounded-full bg-[#315C36]/10 text-[#315C36] dark:text-[#34C759] text-xs font-bold">
-            v2.4.0 (2026.09)
+            v1.0 (2026.09)
           </div>
 
           <p className="text-xs text-[#6E6E73] dark:text-[#8E8E93] leading-relaxed break-keep px-2">
