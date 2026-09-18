@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutList, Table as TableIcon, Search } from 'lucide-react';
-import { gasApi, getCollectionSheetUrl, type CollectionData, type DashboardData } from '../../services/gasClient';
+import { gasApi, type CollectionData, type DashboardData } from '../../services/gasClient';
 import { isImplausiblePrevious } from '../../services/reportData';
 import { ResourceImpactSection } from './ResourceImpactSection';
 import '../../styles/collection-impact.css';
@@ -149,7 +149,6 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
   const maxWeek = Math.max(...(dashboard?.collection.weeklyKg || [0]), 1);
   const maxStore = Math.max(...(dashboard?.topStores.map((store) => store.totalKg) || [0]), 1);
 
-  const sheetUrl = getCollectionSheetUrl(year, month);
 
   // 주차별 / 전월 / 동기간 비교 지표 텍스트 계산
   const isPartial = dashboard?.collection.isPartialMonth ?? false;
@@ -225,14 +224,6 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
               {loadedAt.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준
             </span>
           )}
-          <a
-            href={sheetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="collection-impact__sheet-link"
-          >
-            <span>🔗 구글 시트 원본 ({year}년 {month}월) ↗</span>
-          </a>
         </div>
       </section>
       )}
@@ -510,14 +501,6 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
           <footer className="collection-impact__provenance" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span className="collection-impact__badge">데이터 기준</span>
-              <a
-                href={sheetUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="collection-impact__footer-link"
-              >
-                Google Sheets 원본 시트 바로가기 ({dashboard.period.year}년 {dashboard.period.month}월) ↗
-              </a>
             </div>
             <p style={{ margin: 0, fontSize: '13px' }}>
               수거량은 {dashboard.period.year}년 수거대장 {dashboard.period.month}월 시트의 주차별 실제 입력값을 기준으로 정밀 집계합니다.
