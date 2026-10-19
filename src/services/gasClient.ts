@@ -407,7 +407,25 @@ async function request<T>(action: string, params: Record<string, string | number
 
 export const gasApi = {
   async dashboard(year: number, month: number): Promise<DashboardData> {
-    const raw = await request<DashboardData>('dashboard', { year, month });
+    // 전월/동기간 비교는 전월 주차 데이터가 필요하다.
+    // 런타임 캐시에 없으면 고정 기준표(VERIFIED_*)로 떨어지는데, 기준표는 작성 시점 이후 기록이 빠져 있어
+    // 새 달로 넘어가면 비교 수치가 틀어진다. → 전월 수거기록을 시트에서 함께 읽어 캐시에 채운다.
+    const prevDate = new Date(year, month - 2, 1);
+    const prevYear = prevDate.getFullYear();
+    const prevMonth = prevDate.getMonth() + 1;
+    const prevKey = `${prevYear}-${prevMonth}`;
+    const prefetchPrev = runtimeWeeklyCache.has(prevKey)
+      ? Promise.resolve()
+      : request<CollectionData>('collections', { year: prevYear, month: prevMonth })
+          .then((prevRaw) => {
+            sanitizeCollectionData(prevRaw);
+          })
+          .catch((err: unknown) => {
+            // 전월 시트가 없어도 이번 달 화면은 보여준다 (기준표로 대체)
+            console.warn('전월 수거기록을 불러오지 못했습니다:', err);
+          });
+
+    const [raw] = await Promise.all([request<DashboardData>('dashboard', { year, month }), prefetchPrev]);
     return sanitizeDashboardData(raw, year, month);
   },
   async collections(year: number, month: number): Promise<CollectionData> {

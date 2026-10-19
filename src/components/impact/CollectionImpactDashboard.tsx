@@ -5,20 +5,35 @@ import { isImplausiblePrevious } from '../../services/reportData';
 import { ResourceImpactSection } from './ResourceImpactSection';
 import '../../styles/collection-impact.css';
 
-const YEARS = [2026, 2025] as const;
+/** 수거 시작 시점 — 2025년 4월(시범 운영) */
+const FIRST_YEAR = 2025;
+const FIRST_MONTH = 4;
 
+/** 오늘 날짜 기준 연도 목록 (최신 연도가 먼저) — 해가 바뀌어도 코드 수정 없이 자동 추가 */
+function getAvailableYears(): number[] {
+  const currentYear = Math.max(new Date().getFullYear(), FIRST_YEAR);
+  const years: number[] = [];
+  for (let y = currentYear; y >= FIRST_YEAR; y -= 1) years.push(y);
+  return years;
+}
+
+/**
+ * 연도별 조회 가능한 월 — 올해는 이번 달까지, 지난해는 12월까지.
+ * (예전에는 '9월까지'로 고정돼 있어 새 달 수거기록이 화면에 반영되지 않았음)
+ */
 function getAvailableMonths(year: number): number[] {
-  if (year === 2025) {
-    // 2025년 수거는 4월(시범 운영)부터 시작
-    return [4, 5, 6, 7, 8, 9, 10, 11, 12];
-  }
-  // 2026년은 현재 9월까지 수거 데이터 작성 완료
-  return [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const now = new Date();
+  const startMonth = year === FIRST_YEAR ? FIRST_MONTH : 1;
+  const endMonth = year === now.getFullYear() ? now.getMonth() + 1 : 12;
+  const months: number[] = [];
+  for (let m = startMonth; m <= endMonth; m += 1) months.push(m);
+  return months.length ? months : [startMonth];
 }
 
 function getInitialPeriod() {
   const now = new Date();
-  const year = YEARS.includes(now.getFullYear() as (typeof YEARS)[number]) ? now.getFullYear() : 2026;
+  const years = getAvailableYears();
+  const year = years.includes(now.getFullYear()) ? now.getFullYear() : years[0];
   const currentMonth = now.getMonth() + 1;
   const available = getAvailableMonths(year);
   const month = available.includes(currentMonth) ? currentMonth : available[available.length - 1];
@@ -44,6 +59,7 @@ interface CollectionImpactDashboardProps {
 
 export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, embedded }: CollectionImpactDashboardProps = {}) {
   const initial = useMemo(getInitialPeriod, []);
+  const years = useMemo(getAvailableYears, []);
   const [year, setYear] = useState(fixedYear ?? initial.year);
   const [month, setMonth] = useState(fixedMonth ?? initial.month);
 
@@ -203,7 +219,7 @@ export function CollectionImpactDashboard({ year: fixedYear, month: fixedMonth, 
           <label>
             <span>연도</span>
             <select value={year} onChange={(event) => setYear(Number(event.target.value))}>
-              {YEARS.map((item) => <option key={item} value={item}>{item}년</option>)}
+              {years.map((item) => <option key={item} value={item}>{item}년</option>)}
             </select>
           </label>
           <label>
