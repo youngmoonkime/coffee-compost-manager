@@ -1,6 +1,7 @@
 /**
  * 구글 스프레드시트 Apps Script 연동 템플릿 코드 및 안내 가이드
  */
+import { SAWDUST_BASIS } from './impactFactors';
 
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
@@ -1552,7 +1553,7 @@ function exportWonText(won) {
 /** 추정치의 근거 — 공식 감축량으로 읽히지 않게 문서마다 밝힌다 */
 function exportImpactNote() {
   return "※ 소각 배출 회피 = 수거량 × 0.338kgCO₂/kg (외부 참고 계수, 국가 승인 배출계수·공식 감축 인증 아님). " +
-    "톱밥 절감 = min(목장 월 톱밥 소요량 × 50%, 수거량) × 톱밥 단가 (운송·처리비 미반영 추정).";
+    "톱밥 절감 = min(목장 월 톱밥 소요량 × 50%, 수거량 × ${SAWDUST_BASIS.ratioText}) × 톱밥 단가 (부피 등가 환산: ${SAWDUST_BASIS.densityText}, 운송·처리비 미반영 추정).";
 }
 
 /** 슬라이드 헤더 도우미 */

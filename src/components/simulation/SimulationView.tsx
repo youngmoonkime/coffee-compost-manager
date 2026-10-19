@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { sawdustSavingFromAmounts } from '../../utils/sawdustSaving';
+import { SAWDUST_BASIS } from '../../constants/impactFactors';
 import { useCompost } from '../../contexts/CompostContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import './barnSimulation.css';
@@ -27,12 +28,13 @@ const SIMULATION_EVIDENCES: Record<string, SimulationEvidence> = {
   saving: {
     title: '예상 톱밥 구매 절감',
     badge: '축산농가 깔개 수급 실무 기준',
-    source: '앱 설정의 톱밥 단가(원/톤)와 목장 월 톱밥 소요량 · 커피박 혼합 시 톱밥 구매 50% 절감 가정',
-    summary: '커피박을 깔개로 섞어 쓰면 톱밥 구매가 50% 줄어든다고 보고, 줄어드는 톱밥 양에 톤 단가를 곱한 추정입니다.',
+    source: `앱 설정의 톱밥 단가(원/톤)와 목장 월 톱밥 소요량 · 부피 등가 환산(${SAWDUST_BASIS.densityText})`,
+    summary: '깔개는 부피로 깔고 톱밥은 무게로 사므로, 커피박을 같은 부피의 톱밥으로 바꿔 톤 단가를 곱한 추정입니다.',
     details: [
-      '산출 공식: min(월 톱밥 소요량 × 50%, 커피박 사용량) × 톱밥 톤당 단가',
-      '커피박이 모자라면 사용한 커피박만큼만, 넘치면 소요량의 50%까지만 절감으로 인정합니다.',
-      '월 톱밥 소요량은 축종·두수·계절에 따라 크게 달라집니다 (예: 한우 100두 월 15~20톤). 실제 구입량을 넣어 주세요.',
+      `산출 공식: min(월 톱밥 소요량 × 50%, 커피박 사용량 × ${SAWDUST_BASIS.ratioText}) × 톱밥 톤당 단가`,
+      `커피박 1톤 ≒ ${SAWDUST_BASIS.coffeeM3PerTonText}㎥ ≒ 톱밥 약 ${SAWDUST_BASIS.ratioText}톤을 대체합니다. 혼합 한도(커피박 50% + 톱밥 50%) 때문에 소요량의 50%까지만 인정합니다.`,
+      '선행 연구의 중량 1:1 가정(톤당 8만 원)은 절감액을 부풀려서 쓰지 않습니다.',
+      '월 톱밥 소요량은 축종·두수에 따라 크게 달라집니다 (예: 한우 두당 연 600~700kg → 100두 월 약 5~6톤). 실제 구입량을 넣어 주세요.',
       '기본값은 설정 > 목장 설정의 기본 톱밥 단가와 목장별 월 소요량에서 가져옵니다. 운송·처리비는 빼지 않았습니다.',
     ],
   },
@@ -83,7 +85,7 @@ const SIMULATION_EVIDENCES: Record<string, SimulationEvidence> = {
     summary: '커피박 자원순환을 통한 축사 환경 개선 효과를 과학적 연구 데이터와 경제성 지표로 검증한 시뮬레이션입니다.',
     details: [
       '복합악취 저감: 커피박 다공성 탄소 구조의 물리화학적 악취 가스 흡착 실증치 반영',
-      '톱밥 비용 절감: 월 톱밥 소요량의 50% 한도에서 커피박 사용량만큼 줄어드는 톱밥 구매비 추정',
+      '톱밥 비용 절감: 월 톱밥 소요량의 50% 한도에서 커피박과 같은 부피만큼 줄어드는 톱밥 구매비 추정',
       '공간 악취 분포: 실측 센서 2점 기반의 IDW 보간 알고리즘 시각화',
       '본 시뮬레이션은 농가의 실제 적용 시 참고할 수 있는 예측 지표를 제공합니다.',
     ],
@@ -1047,7 +1049,7 @@ export const SimulationView: React.FC = () => {
       const savingNoteEl = root!.querySelector<HTMLElement>('#apple-saving-note');
       if (savingNoteEl) {
         savingNoteEl.textContent = saved
-          ? `줄어든 톱밥 ${saved.savedTons.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}톤 · ${saved.limitedBy === 'coffee' ? '커피박 사용량 한도' : '소요량 50% 한도'}`
+          ? `줄어든 톱밥 ${saved.savedTons.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}톤 · ${saved.limitedBy === 'coffee' ? '커피박 부피만큼' : '소요량 50% 한도'}`
           : '톱밥 비용 가정에서 월 소요량 입력';
       }
       const dayValEl = root!.querySelector<HTMLElement>('#apple-day');
@@ -1614,7 +1616,7 @@ export const SimulationView: React.FC = () => {
               <input id="bm-price" type="number" min="0" max="10000000" step="1000" defaultValue="120000" />
             </label>
           </div>
-          <p className="muted">절감 = min(월 소요량 × 50%, 커피박 사용량) × 톤 단가 · 운송·처리비 차감 전 · 실제 구매 절감 보장 아님</p>
+          <p className="muted">절감 = min(월 소요량 × 50%, 커피박 사용량 × {SAWDUST_BASIS.ratioText}) × 톤 단가 · 부피 등가 환산 · 운송·처리비 차감 전 · 실제 구매 절감 보장 아님</p>
         </details>
       </div>
 
@@ -1673,7 +1675,7 @@ export const SimulationView: React.FC = () => {
               —
             </div>
             <div className="result-note" id="apple-saving-note">
-              톱밥 구매 50% 절감 가정
+              부피 등가 환산 (커피박 1톤 ≒ 톱밥 {SAWDUST_BASIS.ratioText}톤)
             </div>
           </article>
           <article className="result-card">

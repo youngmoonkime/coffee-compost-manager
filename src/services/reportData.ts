@@ -53,7 +53,7 @@ export interface FieldFact {
 
 export interface RanchSaving {
   ranchName: string;
-  /** 실제로 줄어드는 톱밥(톤) = min(월 소요량 × 50%, 들어온 커피박) */
+  /** 실제로 줄어드는 톱밥(톤) = min(월 소요량 × 50%, 커피박과 같은 부피의 톱밥) */
   tons: number;
   pricePerTon: number;
   /** ranch = 목장별로 입력한 단가, default = 기본 단가 */
@@ -806,7 +806,7 @@ export function buildImpactFacts({
   }
 
   // ── 톱밥 구매비 절감 추정 ──
-  // 커피박을 섞어 쓰면 목장의 톱밥 구매가 50% 줄어든다고 본다: min(월 소요량 × 50%, 들어온 커피박) × 톱밥 단가.
+  // 커피박을 같은 부피의 톱밥으로 바꿔 셈한다: min(월 소요량 × 50%, 커피박 × 178/650) × 톱밥 단가.
   // 매장 수거량(수거관리)은 목장별로 나뉘어 있지 않으므로, 받는 목장이 하나로 정해질 때만 그 목장에 붙인다.
   const defaultPrice = settings.sawdustPricePerTon;
   const missingDemand: string[] = [];
@@ -895,7 +895,7 @@ export function buildImpactFacts({
   if (savings) {
     const parts = byRanch.map(
       item =>
-        `${item.ranchName} 줄어든 톱밥 ${item.tons.toLocaleString('ko-KR')}톤(월 소요량 ${item.monthlyTons}톤의 50%와 커피박 중 작은 값) × ${item.pricePerTon.toLocaleString('ko-KR')}원/톤(${
+        `${item.ranchName} 줄어든 톱밥 ${item.tons.toLocaleString('ko-KR')}톤(월 소요량 ${item.monthlyTons}톤의 50%와 커피박 부피 등가 톱밥 중 작은 값) × ${item.pricePerTon.toLocaleString('ko-KR')}원/톤(${
           item.priceSource === 'ranch' ? '목장 단가' : '기본 단가'
         })`
     );

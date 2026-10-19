@@ -1,15 +1,16 @@
 import type { CompostSettings } from '../types';
-import { SAWDUST_SAVING_RATE } from '../constants/defaultData';
+import { SAWDUST_SAVING_RATE, SAWDUST_TONS_PER_COFFEE_TON } from '../constants/defaultData';
 import { normalizeName } from './calculations';
 
 /**
  * 톱밥 구매비 절감 추정.
  *
- * 커피박을 깔개로 섞어 쓰면 목장의 톱밥 구매량이 절반(50%)으로 줄어든다고 본다.
- * - 줄일 수 있는 톱밥 = 목장의 월 톱밥 소요량 × 50%
- * - 실제로 줄어드는 톱밥 = min(줄일 수 있는 톱밥, 그달 들어온 커피박)
+ * 깔개는 바닥면적 × 두께(부피)로 깔고 톱밥은 무게로 사므로, 커피박을 같은 부피의 톱밥으로 바꿔 셈한다.
+ * 중량 1:1 로 맞추면 절감액이 크게 부풀려진다 (커피박이 톱밥보다 약 3.7배 무겁다).
+ * - 커피박이 대체하는 톱밥 = 들어온 커피박(톤) × 178/650 (≒ 0.27)
+ * - 줄일 수 있는 톱밥 = 목장의 월 톱밥 소요량 × 50% (커피박 50% + 톱밥 50% 혼합 한도)
+ * - 실제로 줄어드는 톱밥 = min(줄일 수 있는 톱밥, 커피박이 대체하는 톱밥)
  * - 절감액 = 실제로 줄어드는 톱밥(톤) × 톱밥 단가(원/톤)
- * 커피박이 모자라면 들어온 만큼만, 넘치면 소요량의 50% 까지만 인정한다.
  */
 
 export interface SawdustPrice {
@@ -24,6 +25,8 @@ export interface SawdustSavingResult extends SawdustPrice {
   monthlyTons: number | null;
   /** 그달 들어온 커피박(톤) */
   coffeeTons: number;
+  /** 들어온 커피박과 같은 부피의 톱밥(톤) */
+  equivalentSawdustTons: number;
   /** 소요량 × 절감률 — 커피박으로 줄일 수 있는 최대 톱밥(톤) */
   replaceableTons: number | null;
   /** 실제로 줄어드는 톱밥(톤) */
@@ -35,6 +38,8 @@ export interface SawdustSavingResult extends SawdustPrice {
   /** 절감액을 막은 쪽 — demand: 소요량의 50% 까지 / coffee: 들어온 커피박이 더 적음 */
   limitedBy: 'demand' | 'coffee' | null;
   ratePercent: number;
+  /** 커피박 1톤이 대체하는 톱밥(톤) */
+  sawdustPerCoffeeTon: number;
 }
 
 export function sawdustPriceOf(settings: CompostSettings, ranchName: string): SawdustPrice {
@@ -53,17 +58,29 @@ export function sawdustSavingFromAmounts({
   monthlyTons: number | null;
   coffeeKg: number;
   pricePerTon: number;
-}): { savedTons: number; savingKrw: number; replaceableTons: number; limitedBy: 'demand' | 'coffee' } | null {
+}): {
+  savedTons: number;
+  savingKrw: number;
+  replaceableTons: number;
+  equivalentSawdustTons: number;
+  limitedBy: 'demand' | 'coffee';
+} | null {
   if (!monthlyTons || monthlyTons <= 0) return null;
-  const coffeeTons = Math.max(0, coffeeKg) / 1000;
+  const equivalentSawdustTons = equivalentSawdustTonsOf(coffeeKg);
   const replaceableTons = monthlyTons * SAWDUST_SAVING_RATE;
-  const savedTons = Math.min(replaceableTons, coffeeTons);
+  const savedTons = Math.min(replaceableTons, equivalentSawdustTons);
   return {
     savedTons,
     replaceableTons,
+    equivalentSawdustTons,
     savingKrw: Math.round(savedTons * Math.max(0, pricePerTon)),
-    limitedBy: coffeeTons < replaceableTons ? 'coffee' : 'demand',
+    limitedBy: equivalentSawdustTons < replaceableTons ? 'coffee' : 'demand',
   };
+}
+
+/** 커피박(kg)과 같은 부피의 톱밥(톤) */
+export function equivalentSawdustTonsOf(coffeeKg: number): number {
+  return (Math.max(0, coffeeKg) / 1000) * SAWDUST_TONS_PER_COFFEE_TON;
 }
 
 export function computeSawdustSaving(
@@ -77,6 +94,8 @@ export function computeSawdustSaving(
   const monthlyTons = rawMonthly && rawMonthly > 0 ? rawMonthly : null;
   const coffeeTons = Math.max(0, coffeeKg) / 1000;
   const ratePercent = Math.round(SAWDUST_SAVING_RATE * 100);
+  const equivalentSawdustTons = equivalentSawdustTonsOf(coffeeKg);
+  const sawdustPerCoffeeTon = SAWDUST_TONS_PER_COFFEE_TON;
 
   if (monthlyTons === null) {
     return {
@@ -84,12 +103,14 @@ export function computeSawdustSaving(
       ...price,
       monthlyTons: null,
       coffeeTons,
+      equivalentSawdustTons,
       replaceableTons: null,
       savedTons: null,
       monthlySpendKrw: null,
       savingKrw: null,
       limitedBy: null,
       ratePercent,
+      sawdustPerCoffeeTon,
     };
   }
 
@@ -99,11 +120,13 @@ export function computeSawdustSaving(
     ...price,
     monthlyTons,
     coffeeTons,
+    equivalentSawdustTons,
     replaceableTons: amounts?.replaceableTons ?? null,
     savedTons: amounts?.savedTons ?? null,
     monthlySpendKrw: Math.round(monthlyTons * price.pricePerTon),
     savingKrw: amounts?.savingKrw ?? null,
     limitedBy: amounts?.limitedBy ?? null,
     ratePercent,
+    sawdustPerCoffeeTon,
   };
 }

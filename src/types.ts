@@ -148,7 +148,7 @@ export interface CompostSettings {
   beddingTargetKg: Record<string, number>;
   /**
    * 기본 톱밥 단가(원/톤). 목장별 단가를 넣지 않은 목장에 쓴다.
-   * 톱밥 절감액 = min(월 소요량 × 50%, 들어온 커피박) × 단가.
+   * 톱밥 절감액 = min(월 소요량 × 50%, 커피박과 같은 부피의 톱밥) × 단가.
    */
   sawdustPricePerTon: number;
   /** 목장별 톱밥 구매 단가(원/톤). 목장마다 구매처·운송비가 달라 따로 정한다. */

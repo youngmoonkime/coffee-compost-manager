@@ -17,7 +17,9 @@ import {
   COMPOST_GAS_API_URL,
   LEGACY_DEFAULT_SAWDUST_PRICE_PER_TON,
   KNOWN_RANCH_SAWDUST_PRICES,
+  LEGACY_KNOWN_RANCH_SAWDUST_PRICES,
   KNOWN_RANCH_SAWDUST_MONTHLY_TONS,
+  LEGACY_KNOWN_RANCH_SAWDUST_MONTHLY_TONS,
 } from '../constants/defaultData';
 import { createCycle, resolveCycle } from '../utils/fieldOps';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../utils/storage';
@@ -123,7 +125,13 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
       if (!(ranch in sawdustPriceByRanch)) sawdustPriceByRanch[ranch] = won;
     }
   }
-  // 알려진 목장의 월 톱밥 소요량(다원목장 18톤)도 같은 방식으로 한 번만 넣는다
+  // v5 까지 앱이 넣어 준 다원목장 단가(120,000원/톤)가 그대로면 제주 단가(160,000원/톤)로 한 번만 맞춘다
+  if (storedVersion < 6) {
+    for (const [ranch, won] of Object.entries(LEGACY_KNOWN_RANCH_SAWDUST_PRICES)) {
+      if (sawdustPriceByRanch[ranch] === won) sawdustPriceByRanch[ranch] = KNOWN_RANCH_SAWDUST_PRICES[ranch];
+    }
+  }
+  // 알려진 목장의 월 톱밥 소요량(다원목장 11톤)도 같은 방식으로 한 번만 넣는다
   const sawdustMonthlyTonsByRanch =
     stored.sawdustMonthlyTonsByRanch === undefined
       ? { ...DEFAULT_SETTINGS.sawdustMonthlyTonsByRanch }
@@ -131,6 +139,12 @@ function normalizeSettings(stored: Partial<CompostSettings>): CompostSettings {
   if (storedVersion < 5) {
     for (const [ranch, tons] of Object.entries(KNOWN_RANCH_SAWDUST_MONTHLY_TONS)) {
       if (!(ranch in sawdustMonthlyTonsByRanch)) sawdustMonthlyTonsByRanch[ranch] = tons;
+    }
+  }
+  // v6 까지 앱이 넣어 준 다원목장 18톤이 그대로면 11톤으로 한 번만 맞춘다
+  if (storedVersion < 7) {
+    for (const [ranch, tons] of Object.entries(LEGACY_KNOWN_RANCH_SAWDUST_MONTHLY_TONS)) {
+      if (sawdustMonthlyTonsByRanch[ranch] === tons) sawdustMonthlyTonsByRanch[ranch] = KNOWN_RANCH_SAWDUST_MONTHLY_TONS[ranch];
     }
   }
 

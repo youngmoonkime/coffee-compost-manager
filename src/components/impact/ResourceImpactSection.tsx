@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useCompost } from '../../contexts/CompostContext';
-import { CARBON_FACTOR_NOTE, COFFEE_GROUNDS_INCINERATION_CO2_PER_KG } from '../../constants/impactFactors';
+import { CARBON_FACTOR_NOTE, COFFEE_GROUNDS_INCINERATION_CO2_PER_KG, SAWDUST_FACTOR_NOTE } from '../../constants/impactFactors';
 import { computeSawdustSaving } from '../../utils/sawdustSaving';
 import { ImpactCard } from './ImpactCard';
 import { OdorImpactCard } from './OdorImpactCard';
@@ -42,7 +42,7 @@ export function ResourceImpactSection({ collectedKg, receivingRanch, year, month
   const co2Kg = kg * COFFEE_GROUNDS_INCINERATION_CO2_PER_KG;
   const exampleCo2 = CARBON_FACTOR_NOTE.example.kg * COFFEE_GROUNDS_INCINERATION_CO2_PER_KG;
 
-  // 톱밥 — min(받는 목장의 월 소요량 × 50%, 들어온 커피박) × 톤 단가
+  // 톱밥 — min(받는 목장의 월 소요량 × 50%, 커피박과 같은 부피의 톱밥) × 톤 단가
   const saw = computeSawdustSaving(settings, receivingRanch ?? '', kg);
   const ranch = saw.ranchName;
   const usesRanchPrice = saw.priceSource === 'ranch';
@@ -102,26 +102,41 @@ export function ResourceImpactSection({ collectedKg, receivingRanch, year, month
           info={
             <>
               <p className="collection-impact__impact-note-line">
-                <b>산정식</b> min(월 톱밥 소요량 × {saw.ratePercent}%, 들어온 커피박) × 톱밥 단가
+                <b>산정식</b> min(월 톱밥 소요량 × {saw.ratePercent}%, 커피박 × {fmtTons(saw.sawdustPerCoffeeTon)}) × 톱밥 단가
               </p>
               <p className="collection-impact__impact-note-line">
-                커피박을 깔개로 섞어 쓰면 톱밥 구매가 {saw.ratePercent}% 줄어든다고 봅니다. 커피박이 모자라면 들어온 만큼만,
-                넘치면 소요량의 {saw.ratePercent}%까지만 인정합니다. 운송·처리비는 빼지 않았고, 실제 구매 절감을 보장하지 않습니다.
+                깔개는 부피로 깔고 톱밥은 무게로 사므로, 커피박을 같은 부피의 톱밥으로 바꿔 셈합니다. {SAWDUST_FACTOR_NOTE.conversion}.
+                혼합 한도는 소요량의 {saw.ratePercent}%(커피박 50% + 톱밥 50%)입니다.
               </p>
+              <ul>
+                {SAWDUST_FACTOR_NOTE.densities.map(line => <li key={line}>{line}</li>)}
+              </ul>
               {saw.monthlyTons !== null && saw.replaceableTons !== null && saw.monthlySpendKrw !== null ? (
                 <p className="collection-impact__impact-note-line">
                   <b>{ranch}</b> 월 소요량 {fmtTons(saw.monthlyTons)}톤(지출 {formatWon(saw.monthlySpendKrw)}) → 줄일 수 있는 톱밥{' '}
-                  {fmtTons(saw.replaceableTons)}톤 · 들어온 커피박 {fmtTons(saw.coffeeTons)}톤
-                  {saw.limitedBy === 'coffee' ? ' → 커피박이 적어 들어온 만큼만 반영' : ` → 소요량의 ${saw.ratePercent}%까지 반영`}
+                  {fmtTons(saw.replaceableTons)}톤 · 들어온 커피박 {fmtTons(saw.coffeeTons)}톤 = 톱밥 {fmtTons(saw.equivalentSawdustTons)}톤 부피
+                  {saw.limitedBy === 'coffee' ? ' → 커피박 부피만큼 반영' : ` → 소요량의 ${saw.ratePercent}%까지 반영`}
                 </p>
               ) : (
                 <p className="collection-impact__impact-note-line">
-                  <b>{ranch || '목장'}</b> 월 톱밥 소요량이 설정되지 않았습니다. 축종·두수·계절에 따라 크게 달라서(예: 한우 100두 월 15~20톤) 실제 구입량을 넣어주세요.
+                  <b>{ranch || '목장'}</b> 월 톱밥 소요량이 설정되지 않았습니다. 축종·두수에 따라 크게 달라서(예: 한우 두당 연 600~700kg, 100두면 월 약 5~6톤) 실제 구입량을 넣어주세요.
                 </p>
               )}
               <p className="collection-impact__impact-note-line">
                 <b>단가</b> {priceLabel} · 목장별 단가를 넣지 않으면 기본 단가를 씁니다
               </p>
+              <p className="collection-impact__impact-note-line"><b>두당 깔개 소요량 기준</b></p>
+              <ul>
+                {SAWDUST_FACTOR_NOTE.perHead.map(line => <li key={line}>{line}</li>)}
+              </ul>
+              <p className="collection-impact__impact-note-line"><b>적용 예</b></p>
+              <ul>
+                {SAWDUST_FACTOR_NOTE.examples.map(line => <li key={line}>{line}</li>)}
+              </ul>
+              <p className="collection-impact__impact-note-line"><b>선행 연구와 다른 점</b> {SAWDUST_FACTOR_NOTE.previousStudy}</p>
+              <ul>
+                {SAWDUST_FACTOR_NOTE.limits.map(line => <li key={line}>{line}</li>)}
+              </ul>
             </>
           }
         />
@@ -179,7 +194,7 @@ function SawdustSettingModal({ ranch, onClose }: { ranch: string; onClose: () =>
             onChange={e => setMonthly(e.target.value)}
             className={fieldClass}
           />
-          <span className="font-normal">한 달에 실제로 사는 톱밥 양입니다. 축종·두수·계절에 따라 크게 달라집니다 (예: 한우 100두 월 15~20톤).</span>
+          <span className="font-normal">한 달에 실제로 사는 톱밥 양입니다. 축종·두수에 따라 크게 달라집니다 (예: 한우 두당 연 600~700kg → 100두 월 약 5~6톤, 젖소 두당 연 1,100~1,400kg).</span>
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold text-[#6E6E73] dark:text-[#8E8E93]">
           톱밥 구매 단가 (원/톤)

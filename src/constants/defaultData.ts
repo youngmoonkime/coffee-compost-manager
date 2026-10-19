@@ -7,8 +7,10 @@ import { readEnvUrl } from '../utils/env';
  * 3: 기본 톱밥 단가가 120,000원/톤으로 바뀐 판.
  * 4: 다원목장 톱밥 단가(120,000원/톤)를 넣은 판.
  * 5: 다원목장 월 톱밥 소요량(18톤)을 넣은 판.
+ * 6: 톱밥 절감을 부피 등가로 셈하고, 다원목장 톱밥 단가를 제주 단가(160,000원/톤)로 바꾼 판.
+ * 7: 다원목장 월 톱밥 소요량을 산출근거(연 약 132톤)에 맞춰 11톤으로 바꾼 판.
  */
-export const SETTINGS_VERSION = 5;
+export const SETTINGS_VERSION = 7;
 
 /** 기본 톱밥 단가(원/톤) — 목장별 단가를 넣지 않은 목장에 쓴다 */
 export const DEFAULT_SAWDUST_PRICE_PER_TON = 120_000;
@@ -20,18 +22,47 @@ export const LEGACY_DEFAULT_SAWDUST_PRICE_PER_TON = 240_000;
  * 처음부터 알고 있는 목장별 톱밥 단가(원/톤).
  * 다원목장은 부숙 기록이 없고 수거관리 시트에만 운영 목장(2026년 1~8월)으로 올라 있어,
  * 단가를 넣어 두어야 설정 > 목장 설정에 탭이 생긴다.
+ * 다원목장 단가는 톱밥 절감 산출근거의 제주 톱밥 단가(160원/kg)다.
  */
 export const KNOWN_RANCH_SAWDUST_PRICES: Record<string, number> = {
+  다원목장: 160_000,
+};
+
+/** v5 까지 앱이 넣어 준 다원목장 단가 — 사람이 바꾸지 않은 채 남아 있으면 새 단가로 옮긴다 */
+export const LEGACY_KNOWN_RANCH_SAWDUST_PRICES: Record<string, number> = {
   다원목장: 120_000,
 };
 
-/** 처음부터 알고 있는 목장별 월 톱밥 소요량(톤) */
+/**
+ * 처음부터 알고 있는 목장별 월 톱밥 소요량(톤).
+ * 다원목장: 선행 연구의 "연간 깔개 소요량의 50% ≒ 66톤" → 연 약 132톤 ÷ 12 ≒ 월 11톤.
+ */
 export const KNOWN_RANCH_SAWDUST_MONTHLY_TONS: Record<string, number> = {
+  다원목장: 11,
+};
+
+/** v6 까지 앱이 넣어 준 다원목장 월 소요량 — 사람이 바꾸지 않은 채 남아 있으면 새 값으로 옮긴다 */
+export const LEGACY_KNOWN_RANCH_SAWDUST_MONTHLY_TONS: Record<string, number> = {
   다원목장: 18,
 };
 
-/** 커피박을 깔개로 쓰면 톱밥 구매 지출이 줄어드는 비율 (50%) */
+/**
+ * 깔개 부피 가운데 커피박이 맡을 수 있는 최대 비율 (50%) — 커피박 50% + 톱밥 50% 혼합 기준.
+ * 커피박이 아무리 많이 들어와도 월 톱밥 소요량의 이 비율까지만 줄어든다고 본다.
+ */
 export const SAWDUST_SAVING_RATE = 0.5;
+
+/** 톱밥 용적중(kg/㎥) — 축우 사육용 깔짚 물리적 특성 연구 */
+export const SAWDUST_BULK_DENSITY_KG_PER_M3 = 178;
+
+/** 커피박 겉보기밀도(kg/㎥) — 톤백 1㎥당 700~800kg 적재 기준 추정, 현장 실측 예정 */
+export const COFFEE_GROUNDS_BULK_DENSITY_KG_PER_M3 = 650;
+
+/**
+ * 커피박 1톤이 대체하는 톱밥(톤). 깔개는 바닥면적 × 두께, 즉 부피로 깔기 때문에 부피로 맞춘다.
+ * 커피박 1톤 ≒ 1.54㎥ → 톱밥 1.54㎥ × 178kg/㎥ ≒ 0.27톤
+ */
+export const SAWDUST_TONS_PER_COFFEE_TON = SAWDUST_BULK_DENSITY_KG_PER_M3 / COFFEE_GROUNDS_BULK_DENSITY_KG_PER_M3;
 
 export const DEFAULT_SETTINGS: CompostSettings = {
   // 건준목장 현장 관찰: 부숙·건조가 정상이면 3~4주 뒤 20~30% 로 내려간다.
